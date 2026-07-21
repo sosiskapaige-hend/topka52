@@ -102,31 +102,67 @@ def try_complete_payment(
     user_id = int(rec["user_id"])
     amt = float(rec.get("amount_requested", 0.0))
     currency = rec.get("currency") or "USDT"
+    payment_type = (rec.get("metadata") or {}).get("type", "deposit")
 
     try:
-        record, _referral = storage.process_deposit(user_id, amt)
-        storage.append_deposit_history(user_id, _deposit_history_entry(invoice_id, amt, currency))
+        if payment_type == "plus_subscription":
+            # Activate Quantum+ subscription for 30 days
+            import datetime
+            expiry = (datetime.datetime.now() + datetime.timedelta(days=30)).isoformat()
+            storage.update_user(
+                user_id,
+                subscription_active=True,
+                subscription_expiry=expiry,
+                operations_limit=300,
+            )
+            storage.append_deposit_history(user_id, _deposit_history_entry(invoice_id, amt, currency))
+            record = storage.get_or_create(user_id)
+            return {
+                "user_id": user_id,
+                "amount": amt,
+                "currency": currency,
+                "balance": record.balance,
+                "invoice_id": invoice_id,
+                "type": "plus_subscription",
+            }
+        else:
+            # Regular deposit — apply commission
+            record_pre = storage.get_or_create(user_id)
+            from bot.constants import DEPOSIT_COMMISSION, DEPOSIT_COMMISSION_PLUS
+            commission = DEPOSIT_COMMISSION_PLUS if record_pre.subscription_active else DEPOSIT_COMMISSION
+            credited = round(amt * (1 - commission), 4)
+            record, _referral = storage.process_deposit(user_id, credited)
+            storage.append_deposit_history(user_id, _deposit_history_entry(invoice_id, credited, currency))
     except Exception:
         payments.release_crediting(invoice_id)
         raise
 
     return {
         "user_id": user_id,
-        "amount": amt,
+        "amount": credited,
         "currency": currency,
         "balance": record.balance,
         "invoice_id": invoice_id,
+        "type": "deposit",
     }
 
 
 async def notify_deposit_success(result: dict) -> None:
     if not result:
         return
-    text = (
-        f"✅ <b>Баланс пополнен!</b>\n\n"
-        f"Зачислено: <b>+{result['amount']:.2f} {result['currency']}</b>\n"
-        f"Текущий баланс: <b>{result['balance']:.4f} {result['currency']}</b>"
-    )
+    payment_type = result.get("type", "deposit")
+    if payment_type == "plus_subscription":
+        text = (
+            f"⭐ <b>Quantum+ активирован!</b>\n\n"
+            f"Срок действия: 30 дней\n"
+            f"Теперь доступно: 300 операций, комиссия 3% на пополнение"
+        )
+    else:
+        text = (
+            f"✅ <b>Баланс пополнен!</b>\n\n"
+            f"Зачислено: <b>+{result['amount']:.4f} {result['currency']}</b>\n"
+            f"Текущий баланс: <b>{result['balance']:.4f} {result['currency']}</b>"
+        )
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
     from bot.constants import CB_WALLET
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("💼 Кошелёк", callback_data=CB_WALLET)]])
@@ -140,7 +176,7 @@ async def notify_deposit_success(result: dict) -> None:
                 reply_markup=keyboard,
             )
     except Exception as e:
-        logger.error("Failed to notify user %s about deposit: %s", result.get("user_id"), e)
+        logger.error("Failed to notify user %s about payment: %s", result.get("user_id"), e)
 
 
 def schedule_deposit_notification(result: dict | None) -> None:

@@ -52,6 +52,10 @@ from bot.constants import (
     SUPPORT_MESSAGE,
     WITHDRAW_AMOUNT,
     WITHDRAW_ADDRESS,
+    DEPOSIT_COMMISSION,
+    DEPOSIT_COMMISSION_PLUS,
+    WITHDRAW_COMMISSION,
+    PLUS_SUBSCRIPTION_PRICE,
 )
 from bot.keyboards import (
     active_bundles_keyboard,
@@ -87,7 +91,8 @@ from bot.keyboards import (
 from bot.storage import UserStorage
 from bot import texts
 
-# ... (keep existing _format_user_line etc)
+# Conversation state for Quantum+ purchase
+PLUS_BUY_AMOUNT = 7
 
 def _format_user_line(user: User) -> str:
     """Format user info into a readable line: Name @username (id)."""
@@ -111,10 +116,10 @@ def _storage(context: ContextTypes.DEFAULT_TYPE) -> UserStorage:
     return context.application.bot_data["storage"]
 
 
-async def _safe_edit_message_text(query, text: str, reply_markup=None) -> None:
+async def _safe_edit_message_text(query, text: str, reply_markup=None, parse_mode: str | None = None) -> None:
     """Safely edit message text handling 'Message is not modified' error."""
     try:
-        await query.edit_message_text(text, reply_markup=reply_markup)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     except BadRequest as e:
         if "Message is not modified" not in str(e):
             raise
@@ -445,11 +450,18 @@ async def show_deposit_awaiting(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     if query is None:
         return DEPOSIT_AMOUNT
-    await _safe_edit_message_text(
-        query,
-        texts.DEPOSIT_AWAITING,
-        reply_markup=deposit_awaiting_keyboard(),
+    user = update.effective_user
+    record = _storage(context).get_or_create(user.id) if user else None
+    commission = DEPOSIT_COMMISSION_PLUS if (record and record.subscription_active) else DEPOSIT_COMMISSION
+    commission_pct = int(commission * 100)
+    text = (
+        f"💳 Пополнение баланса\n\n"
+        f"Пополнение выполняется через @xrocket (USDT).\n\n"
+        f"⚠️ Комиссия: <b>{commission_pct}%</b>\n"
+        f"(при вводе 100 USDT зачисляется {100 - commission_pct} USDT)\n\n"
+        f"Введите сумму в USDT:"
     )
+    await _safe_edit_message_text(query, text, reply_markup=deposit_awaiting_keyboard(), parse_mode="HTML")
     return DEPOSIT_AMOUNT
 
 
@@ -523,10 +535,14 @@ async def deposit_amount_handler(update: Update, context: ContextTypes.DEFAULT_T
                     metadata=metadata,
                 )
 
+            commission = DEPOSIT_COMMISSION_PLUS if user_rec.subscription_active else DEPOSIT_COMMISSION
+            credited = round(amount * (1 - commission), 4)
+            commission_pct = int(commission * 100)
             text = (
-                f"💳 Создан счёт на пополнение:\n\n"
+                f"💳 Счёт создан:\n\n"
                 f"Сумма к оплате: <b>{unique_amount:.3f} USDT</b>\n"
-                f"(уникальная сумма для автоматического распознавания платежа)\n\n"
+                f"Комиссия: {commission_pct}%\n"
+                f"Будет зачислено: <b>{credited:.4f} USDT</b>\n\n"
                 f"После оплаты баланс будет зачислен автоматически."
             )
 
@@ -628,15 +644,83 @@ async def show_plus_about(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await _safe_edit_message_text(query, texts.PLUS_ABOUT, reply_markup=plus_about_keyboard())
 
 
-async def show_plus_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Display Quantum+ purchase screen with payment details."""
+async def show_plus_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start Quantum+ purchase flow via xrocket invoice."""
+    query = update.callback_query
+    if query is None:
+        return ConversationHandler.END
+    await query.answer()
+    text = texts.PLUS_BUY_AWAITING
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💳 Оплатить 40 USDT", callback_data="plus:confirm_buy")],
+        [InlineKeyboardButton("⬅️ Назад", callback_data=CB_QUANTUM_PLUS)],
+    ])
+    await _safe_edit_message_text(query, text, reply_markup=keyboard, parse_mode="HTML")
+    return ConversationHandler.END
+
+
+async def plus_confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Create xrocket invoice for Quantum+ subscription."""
     query = update.callback_query
     if query is None:
         return
-    import os
-    wallet = os.getenv("WALLET_ADDRESS", "0xf26222c49108635a7a00797c98a5416e5b9cd15a")
-    text = texts.PLUS_BUY.format(wallet_address=wallet)
-    await _safe_edit_message_text(query, text, reply_markup=plus_buy_keyboard())
+    await query.answer()
+    user = update.effective_user
+    if not user:
+        return
+
+    try:
+        from bot import xrocket_client_prod as xrocket
+        from bot.payments_service import extract_invoice_from_create_response
+        import json as _json
+
+        storage = _storage(context)
+        user_rec = storage.get_or_create(user.id)
+        payments = context.application.bot_data.get("payments")
+
+        import os
+        rnd = int.from_bytes(os.urandom(2), "big")
+        cents_part = (rnd % 199) + 1
+        unique_amount = round(PLUS_SUBSCRIPTION_PRICE + cents_part / 1000.0, 3)
+
+        payload_meta = _json.dumps(
+            {"user_id": user.id, "system_id": user_rec.system_id, "type": "plus_subscription"},
+            ensure_ascii=False,
+        )
+        resp = await xrocket.create_invoice(
+            unique_amount,
+            description="Quantum+ подписка 30 дней",
+            payload=payload_meta,
+            num_payments=1,
+        )
+        invoice_id, pay_url = extract_invoice_from_create_response(resp)
+        if not invoice_id:
+            raise RuntimeError("No invoice id")
+
+        if payments:
+            payments.create_payment(
+                invoice_id=invoice_id,
+                user_id=user.id,
+                amount_requested=PLUS_SUBSCRIPTION_PRICE,
+                unique_amount=unique_amount,
+                currency="USDT",
+                payment_url=pay_url,
+                metadata={"user_id": user.id, "type": "plus_subscription"},
+            )
+
+        text = (
+            f"⭐ Счёт на Quantum+ создан:\n\n"
+            f"Сумма: <b>{unique_amount:.3f} USDT</b>\n\n"
+            f"После оплаты подписка активируется автоматически."
+        )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💳 Перейти к оплате", url=pay_url)],
+            [InlineKeyboardButton("⬅️ Главное меню", callback_data=CB_MAIN)],
+        ])
+        await _safe_edit_message_text(query, text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        logger.error("Failed to create Quantum+ invoice: %s", e, exc_info=True)
+        await query.message.reply_text("❌ Не удалось создать счёт. Попробуйте позже.")
 
 # --- Info and Tutorial Handlers ---
 
@@ -851,6 +935,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         CB_QUANTUM_PLUS: show_plus,
         CB_PLUS_ABOUT: show_plus_about,
         CB_PLUS_BUY: show_plus_buy,
+        "plus:confirm_buy": plus_confirm_buy,
     }
 
     # Map admin panel to its handler if available
@@ -924,7 +1009,8 @@ async def withdraw_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     text = (
         f"💸 <b>Вывод средств</b>\n\n"
         f"Доступно: {record.balance:.4f} USDT\n"
-        f"Мин. сумма: {WITHDRAW_MIN_AMOUNT} USDT\n\n"
+        f"Мин. сумма: {WITHDRAW_MIN_AMOUNT} USDT\n"
+        f"Комиссия: 8% (вычитается из суммы вывода)\n\n"
         f"Введите сумму для вывода:"
     )
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data=CB_MAIN)]])
@@ -963,12 +1049,15 @@ async def withdraw_amount_handler(update: Update, context: ContextTypes.DEFAULT_
         return WITHDRAW_AMOUNT
 
     context.user_data["withdraw_amount"] = amount
-
+    net_amount = round(amount * (1 - WITHDRAW_COMMISSION), 4)
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data=CB_MAIN)]])
     await update.message.reply_text(
-        f"✅ Сумма: {amount:.4f} USDT\n\n"
-        f"Введите адрес вашего кошелька (USDT TRC-20):",
-        reply_markup=keyboard
+        f"✅ Сумма: {amount:.4f} USDT\n"
+        f"Комиссия 8%: −{amount * WITHDRAW_COMMISSION:.4f} USDT\n"
+        f"Получите на руки: <b>{net_amount:.4f} USDT</b>\n\n"
+        f"Введите адрес вашего кошелька (USDT TON):",
+        reply_markup=keyboard,
+        parse_mode="HTML",
     )
     return WITHDRAW_ADDRESS
 
@@ -999,20 +1088,25 @@ async def withdraw_address_handler(update: Update, context: ContextTypes.DEFAULT
         await update.message.reply_text("❌ Ошибка: недостаточно средств.")
         return ConversationHandler.END
 
+    net_amount = round(amount * (1 - WITHDRAW_COMMISSION), 4)
+    # Deduct full amount from balance immediately
+    storage.update_user(user.id, balance=record.balance - amount)
+
     withdrawals = context.application.bot_data["withdrawals"]
     uname = user.username or user.first_name or str(user.id)
     withdraw_id = withdrawals.create_withdrawal(
         user_id=user.id,
         username=uname,
-        amount=amount,
+        amount=net_amount,
         address=address
     )
 
-    # Notify user
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data=CB_MAIN)]])
     await update.message.reply_text(
         f"✅ <b>Заявка на вывод #{withdraw_id} создана!</b>\n\n"
-        f"Сумма: {amount:.4f} USDT\n"
+        f"Списано: {amount:.4f} USDT\n"
+        f"Комиссия 8%: −{amount * WITHDRAW_COMMISSION:.4f} USDT\n"
+        f"К выплате: <b>{net_amount:.4f} USDT</b>\n"
         f"Адрес: <code>{html.escape(address)}</code>\n\n"
         f"Ожидайте подтверждения администратором.",
         parse_mode="HTML",

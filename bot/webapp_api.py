@@ -3,12 +3,15 @@ import hmac
 import json
 import logging
 import os
+import time
 import urllib.parse
+from collections import defaultdict
 from contextlib import asynccontextmanager
 import asyncio
 
 from fastapi import FastAPI, HTTPException, Header, Request, Depends
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from fastapi.staticfiles import StaticFiles
 
@@ -83,6 +86,32 @@ def get_current_user(x_tg_init_data: str = Header(..., alias="X-TG-INIT-DATA")):
 
 
 app = FastAPI(title="Quantum WebApp API")
+
+# CORS — allow Telegram WebApp origin
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://web.telegram.org", "https://topka52.onrender.com"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+# ── Rate limiting (simple in-memory) ─────────────────────────────────────────
+_rate_store: dict[str, list[float]] = defaultdict(list)
+
+def _check_rate(key: str, limit: int, window: int) -> bool:
+    """Return True if allowed, False if rate limited."""
+    now = time.time()
+    hits = _rate_store[key]
+    _rate_store[key] = [t for t in hits if now - t < window]
+    if len(_rate_store[key]) >= limit:
+        return False
+    _rate_store[key].append(now)
+    return True
+
+def _rate_limit(request: Request, limit: int = 30, window: int = 60):
+    ip = request.client.host if request.client else "unknown"
+    if not _check_rate(f"ip:{ip}", limit, window):
+        raise HTTPException(status_code=429, detail="Too many requests")
 
 # Mount static files at root
 app.mount("/app", StaticFiles(directory="webapp", html=True), name="webapp")
@@ -244,9 +273,12 @@ async def _start_payment_poller():
 
 
 @app.get("/api/me")
-async def get_me(user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+async def get_me(request: Request, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+    _rate_limit(request, limit=60, window=60)
     uid = user['id']
     record = storage.get_or_create(uid)
+    from bot.constants import DEPOSIT_COMMISSION, DEPOSIT_COMMISSION_PLUS, WITHDRAW_COMMISSION
+    commission = DEPOSIT_COMMISSION_PLUS if record.subscription_active else DEPOSIT_COMMISSION
     return {
         "telegram_id": uid,
         "system_id": record.system_id,
@@ -259,11 +291,14 @@ async def get_me(user=Depends(get_current_user), storage: UserStorage = Depends(
         "subscription_expiry": record.subscription_expiry,
         "operations_done": record.operations_done,
         "operations_limit": record.operations_limit,
-        "is_banned": record.is_banned
+        "is_banned": record.is_banned,
+        "deposit_commission": commission,
+        "withdraw_commission": WITHDRAW_COMMISSION,
     }
 
 @app.get("/api/bundles")
-async def get_bundles(user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+async def get_bundles(request: Request, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+    _rate_limit(request, limit=30, window=60)
     uid = user['id']
     record = storage.get_or_create(uid)
     
@@ -296,7 +331,8 @@ class LaunchRequest(BaseModel):
     amount: float
 
 @app.post("/api/bundles/launch")
-async def launch_bundle(req: LaunchRequest, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+async def launch_bundle(request: Request, req: LaunchRequest, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+    _rate_limit(request, limit=10, window=60)
     uid = user['id']
     record = storage.get_or_create(uid)
     
@@ -359,13 +395,15 @@ async def launch_bundle(req: LaunchRequest, user=Depends(get_current_user), stor
     return {"status": "success"}
 
 @app.get("/api/transactions")
-async def get_history(user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+async def get_history(request: Request, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+    _rate_limit(request, limit=30, window=60)
     uid = user['id']
     record = storage.get_or_create(uid)
     return {"history": record.history}
 
 @app.get("/api/referrals")
-async def get_referrals(user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+async def get_referrals(request: Request, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+    _rate_limit(request, limit=20, window=60)
     uid = user['id']
     record = storage.get_or_create(uid)
     return {
@@ -378,7 +416,8 @@ class SupportRequest(BaseModel):
     message: str
 
 @app.post("/api/support")
-async def send_support(req: SupportRequest, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage), tickets: TicketStorage = Depends(get_tickets)):
+async def send_support(request: Request, req: SupportRequest, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage), tickets: TicketStorage = Depends(get_tickets)):
+    _rate_limit(request, limit=5, window=300)
     uid = user['id']
     import time
     now = time.time()
@@ -422,32 +461,149 @@ class WithdrawRequest(BaseModel):
     amount: float
     address: str
 
-@app.post("/api/withdraw")
-async def request_withdraw(req: WithdrawRequest, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage), withdrawals: WithdrawStorage = Depends(get_withdrawals)):
+
+class DepositRequest(BaseModel):
+    amount: float
+
+
+@app.post("/api/deposit/create")
+async def create_deposit(request: Request, req: DepositRequest, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+    """Create xrocket invoice for deposit from WebApp."""
+    _rate_limit(request, limit=5, window=60)
+    uid = user['id']
+    if req.amount < 1:
+        raise HTTPException(status_code=400, detail="Минимальная сумма: 1 USDT")
+
+    record = storage.get_or_create(uid)
+    from bot.constants import DEPOSIT_COMMISSION, DEPOSIT_COMMISSION_PLUS
+    commission = DEPOSIT_COMMISSION_PLUS if record.subscription_active else DEPOSIT_COMMISSION
+    credited = round(req.amount * (1 - commission), 4)
+
+    try:
+        import bot.xrocket_client_prod as xrocket
+        from bot.payments_service import extract_invoice_from_create_response
+        import json as _json, os
+
+        payments = get_payments()
+        rnd = int.from_bytes(os.urandom(2), "big")
+        cents_part = (rnd % 199) + 1
+        unique_amount = round(req.amount + cents_part / 1000.0, 3)
+
+        payload_meta = _json.dumps(
+            {"user_id": uid, "system_id": record.system_id, "amount_requested": req.amount},
+            ensure_ascii=False,
+        )
+        resp = await xrocket.create_invoice(
+            unique_amount,
+            description=f"Пополнение {req.amount} USDT",
+            payload=payload_meta,
+            num_payments=1,
+        )
+        invoice_id, pay_url = extract_invoice_from_create_response(resp)
+        if not invoice_id:
+            raise RuntimeError("No invoice id from xrocket")
+
+        payments.create_payment(
+            invoice_id=invoice_id,
+            user_id=uid,
+            amount_requested=req.amount,
+            unique_amount=unique_amount,
+            currency="USDT",
+            payment_url=pay_url,
+            metadata={"user_id": uid, "system_id": record.system_id, "amount_requested": req.amount},
+        )
+        return {
+            "ok": True,
+            "invoice_id": invoice_id,
+            "pay_url": pay_url,
+            "amount": unique_amount,
+            "credited": credited,
+            "commission_pct": int(commission * 100),
+        }
+    except Exception as e:
+        logger.error("Failed to create deposit invoice: %s", e)
+        raise HTTPException(status_code=500, detail="Не удалось создать счёт")
+
+
+@app.post("/api/plus/buy")
+async def buy_plus(request: Request, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage)):
+    """Create xrocket invoice for Quantum+ subscription from WebApp."""
+    _rate_limit(request, limit=3, window=60)
     uid = user['id']
     record = storage.get_or_create(uid)
-    
+    if record.subscription_active:
+        raise HTTPException(status_code=400, detail="Подписка уже активна")
+
+    try:
+        import bot.xrocket_client_prod as xrocket
+        from bot.payments_service import extract_invoice_from_create_response
+        from bot.constants import PLUS_SUBSCRIPTION_PRICE
+        import json as _json, os
+
+        payments = get_payments()
+        rnd = int.from_bytes(os.urandom(2), "big")
+        unique_amount = round(PLUS_SUBSCRIPTION_PRICE + (rnd % 199 + 1) / 1000.0, 3)
+
+        payload_meta = _json.dumps(
+            {"user_id": uid, "system_id": record.system_id, "type": "plus_subscription"},
+            ensure_ascii=False,
+        )
+        resp = await xrocket.create_invoice(
+            unique_amount,
+            description="Quantum+ подписка 30 дней",
+            payload=payload_meta,
+            num_payments=1,
+        )
+        invoice_id, pay_url = extract_invoice_from_create_response(resp)
+        if not invoice_id:
+            raise RuntimeError("No invoice id")
+
+        payments.create_payment(
+            invoice_id=invoice_id,
+            user_id=uid,
+            amount_requested=PLUS_SUBSCRIPTION_PRICE,
+            unique_amount=unique_amount,
+            currency="USDT",
+            payment_url=pay_url,
+            metadata={"user_id": uid, "type": "plus_subscription"},
+        )
+        return {"ok": True, "invoice_id": invoice_id, "pay_url": pay_url, "amount": unique_amount}
+    except Exception as e:
+        logger.error("Failed to create plus invoice: %s", e)
+        raise HTTPException(status_code=500, detail="Не удалось создать счёт")
+
+@app.post("/api/withdraw")
+async def request_withdraw(request: Request, req: WithdrawRequest, user=Depends(get_current_user), storage: UserStorage = Depends(get_storage), withdrawals: WithdrawStorage = Depends(get_withdrawals)):
+    _rate_limit(request, limit=5, window=60)
+    uid = user['id']
+    record = storage.get_or_create(uid)
+
     from bot.storage import WITHDRAW_MIN_AMOUNT
+    from bot.constants import WITHDRAW_COMMISSION
     if req.amount < WITHDRAW_MIN_AMOUNT:
         raise HTTPException(status_code=400, detail=f"Минимальная сумма вывода: {WITHDRAW_MIN_AMOUNT} USDT")
-        
+
     if req.amount > record.balance:
         raise HTTPException(status_code=400, detail="Недостаточно средств")
-        
+
+    net_amount = round(req.amount * (1 - WITHDRAW_COMMISSION), 4)
+    # Deduct full amount immediately
+    storage.update_user(uid, balance=record.balance - req.amount)
+
     import html
     name = user.get("first_name", "")
     if user.get("last_name"): name += f" {user['last_name']}"
     name = html.escape(name.strip())
     username = html.escape(user.get("username", ""))
     uname_str = f"{name} @{username} ({uid})" if username else f"{name} ({uid})"
-    
+
     withdraw_id = withdrawals.create_withdrawal(
         user_id=uid,
         username=uname_str,
-        amount=req.amount,
+        amount=net_amount,
         address=req.address
     )
-    
+
     import main
     if hasattr(main, "ptb_app"):
         app_ptb = main.ptb_app
@@ -455,7 +611,8 @@ async def request_withdraw(req: WithdrawRequest, user=Depends(get_current_user),
         msg = (
             f"💸 <b>Новая заявка на вывод! (WebApp)</b>\n\n"
             f"Пользователь: {uname_str}\n"
-            f"Сумма: <b>{req.amount:.4f} USDT</b>\n\n"
+            f"Списано: <b>{req.amount:.4f} USDT</b>\n"
+            f"К выплате: <b>{net_amount:.4f} USDT</b>\n\n"
             f"Откройте панель администратора для обработки."
         )
         import asyncio
@@ -464,5 +621,5 @@ async def request_withdraw(req: WithdrawRequest, user=Depends(get_current_user),
             from bot.constants import CB_ADMIN_PANEL
             markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔧 Админ-панель", callback_data=CB_ADMIN_PANEL)]])
             asyncio.create_task(app_ptb.bot.send_message(chat_id=admin_id, text=msg, parse_mode="HTML", reply_markup=markup))
-            
-    return {"status": "success", "withdraw_id": withdraw_id}
+
+    return {"status": "success", "withdraw_id": withdraw_id, "net_amount": net_amount}

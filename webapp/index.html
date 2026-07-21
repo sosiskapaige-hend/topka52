@@ -7,32 +7,28 @@
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
     <link rel="stylesheet" href="style.css">
     <style>
-        /* Inline fallback to ensure violet-pink gradient theme even if external CSS is cached */
         :root{--bg:linear-gradient(135deg,#F3E8FF 0%,#FFE4F0 100%);--primary:#8B5CF6;--pink:#EC4899}
         html,body{background:var(--bg)!important}
+        .commission-info{font-size:11px;color:#888;margin-top:6px;text-align:center}
     </style>
 </head>
 <body>
     <div id="app">
         <!-- Header -->
         <header class="header">
-            <div class="header-logo">
-                <span class="logo-text">Quantum</span>
-            </div>
-            <div class="header-balance">
-                <span id="header-balance-value">БАЛАНС 0.0000 USDT</span>
-            </div>
+            <div class="header-logo"><span class="logo-text">Quantum</span></div>
+            <div class="header-balance"><span id="header-balance-value">БАЛАНС 0.0000 USDT</span></div>
         </header>
 
         <!-- Main Content -->
         <main class="content" id="main-content">
+
             <!-- Wallet Tab -->
             <section id="tab-wallet" class="tab-content active">
                 <div class="balance-card">
                     <div class="balance-title">ВАШ БАЛАНС</div>
                     <div class="balance-amount"><span id="wallet-balance">0.0000</span> <small>USDT</small></div>
-                    <div class="plus-badge" id="plus-badge" style="display: none;">● Quantum+</div>
-                    
+                    <div class="plus-badge" id="plus-badge" style="display:none;">● Quantum+</div>
                     <div class="stats-row">
                         <div class="stat-item">
                             <div class="stat-value" id="stat-24h">0.00 USDT</div>
@@ -44,6 +40,7 @@
                         </div>
                     </div>
                     <div class="limit-info">Дневной лимит <span id="wallet-limit">0/100</span></div>
+                    <div class="commission-info" id="wallet-commission-info">Комиссия пополнения: 7% · Вывод: 8%</div>
                 </div>
 
                 <div class="action-buttons">
@@ -56,7 +53,6 @@
 
                 <div class="section-title">История операций</div>
                 <div class="history-list" id="history-list">
-                    <!-- Transactions will be populated here -->
                     <div class="empty-state">Нет операций</div>
                 </div>
             </section>
@@ -67,14 +63,9 @@
                     <div class="section-title">Связки</div>
                     <div class="section-subtitle">ВЫБЕРИТЕ МОНЕТУ</div>
                 </div>
-                
-                <div class="bundles-grid" id="bundles-grid">
-                    <!-- Bundle cards will be populated here -->
-                </div>
-
+                <div class="bundles-grid" id="bundles-grid"></div>
                 <div class="section-title mt-4">Активные связки</div>
                 <div class="active-bundles-list" id="active-bundles-list">
-                    <!-- Active bundles will be populated here -->
                     <div class="empty-state">Нет активных связок</div>
                 </div>
             </section>
@@ -85,12 +76,18 @@
                     <div class="profile-name" id="profile-name">Имя Пользователя</div>
                     <div class="profile-id">ID в системе: <span id="profile-sys-id">ABCDE</span></div>
                     <div class="profile-id">Telegram ID: <span id="profile-tg-id">12345</span></div>
+                    <div class="profile-id" id="profile-subscription" style="margin-top:4px;"></div>
                 </div>
 
                 <div class="menu-list">
                     <div class="menu-item" onclick="showReferrals()">
                         <div class="menu-icon">👥</div>
                         <div class="menu-text">Рефералы</div>
+                        <div class="menu-arrow">›</div>
+                    </div>
+                    <div class="menu-item" id="menu-plus">
+                        <div class="menu-icon">⭐</div>
+                        <div class="menu-text">Quantum+</div>
                         <div class="menu-arrow">›</div>
                     </div>
                     <div class="menu-item" id="menu-support">
@@ -109,40 +106,43 @@
                         <div class="menu-arrow">›</div>
                     </div>
                 </div>
-                
-                <div class="app-version">Версия 1.4</div>
+                <div class="app-version">Версия 1.5</div>
             </section>
-            
-            <!-- Screens (Modals / Overlays) -->
-            <!-- Deposit Screen -->
+
+            <!-- ── Screens ── -->
+
+            <!-- Deposit Screen (xrocket) -->
             <div id="screen-deposit" class="screen">
                 <div class="screen-header">
                     <button class="back-btn" onclick="closeScreen()">‹ Назад</button>
-                    <div class="screen-title">Переведите USDT</div>
+                    <div class="screen-title">Пополнение баланса</div>
                 </div>
                 <div class="screen-content">
-                    <div class="subtitle">Сеть TON · USDT (Jetton)</div>
-                    <div class="alert alert-warning">
-                        ⚠️ Переведите строго <b>указанную ниже</b> сумму USDT. Другая сумма не будет распознана.
+                    <!-- Step 1: enter amount -->
+                    <div id="deposit-input-section">
+                        <div class="alert alert-warning">
+                            ⚠️ Комиссия за пополнение: <b id="deposit-commission-label">7%</b><br>
+                            Пример: вводите 100 USDT → зачисляется <b id="deposit-credited-example">93 USDT</b>
+                        </div>
+                        <div class="form-group mt-3">
+                            <label class="info-label">СУММА ПОПОЛНЕНИЯ (USDT)</label>
+                            <input type="number" class="form-input" id="deposit-input-amount" placeholder="Например: 100" min="1">
+                        </div>
+                        <button class="btn btn-primary full-width mt-4" id="deposit-submit-btn" onclick="submitDeposit()">Создать счёт</button>
                     </div>
-                    
-                    <div class="info-block">
-                        <div class="info-label">СУММА К ПЕРЕВОДУ</div>
-                        <div class="info-value" id="deposit-amount-display">Загрузка...</div>
-                    </div>
-                    
-                    <div class="info-block mt-3">
-                        <div class="info-label">АДРЕС КОШЕЛЬКА</div>
-                        <div class="info-value wallet-address" id="deposit-address-display">0xf26222c49108635a7a00797c98a5416e5b9cd15a</div>
-                    </div>
-                    
-                    <div class="action-buttons mt-4">
-                        <button class="btn btn-secondary full-width mb-2" onclick="copyDepositAmount()">Скопировать сумму</button>
-                        <button class="btn btn-secondary full-width mb-2" onclick="copyDepositAddress()">Скопировать адрес</button>
-                    </div>
-                    
-                    <div class="text-center mt-3 text-muted">
-                        <small>Пополнение выполняется в USDT в сети TON.</small>
+                    <!-- Step 2: invoice created -->
+                    <div id="deposit-invoice-section" style="display:none;">
+                        <div class="alert alert-warning">✅ Счёт создан! Оплатите через @xrocket.</div>
+                        <div class="info-block mt-3">
+                            <div class="info-label">СУММА К ОПЛАТЕ</div>
+                            <div class="info-value" id="deposit-pay-amount">—</div>
+                        </div>
+                        <div class="info-block mt-2">
+                            <div class="info-label">БУДЕТ ЗАЧИСЛЕНО</div>
+                            <div class="info-value" id="deposit-credited">—</div>
+                        </div>
+                        <button class="btn btn-primary full-width mt-4" id="deposit-pay-btn">💳 Перейти к оплате</button>
+                        <button class="btn btn-secondary full-width mt-2" onclick="resetDepositScreen()">← Ввести другую сумму</button>
                     </div>
                 </div>
             </div>
@@ -155,7 +155,7 @@
                 </div>
                 <div class="screen-content">
                     <div class="alert alert-warning" id="withdraw-alert">
-                        Минимальная сумма вывода: 30.0 USDT
+                        Мин. сумма: <b>30 USDT</b> · Комиссия: <b>8%</b>
                     </div>
                     <div class="form-group">
                         <label class="info-label">АДРЕС КОШЕЛЬКА (TON)</label>
@@ -186,14 +186,11 @@
                             <div class="stat-label">Бонус USDT</div>
                         </div>
                     </div>
-                    
                     <div class="info-block">
                         <div class="info-label">РЕФЕРАЛЬНАЯ ССЫЛКА</div>
                         <div class="info-value ref-link" id="ref-link-display">Загрузка...</div>
                     </div>
-                    
                     <button class="btn btn-primary full-width mt-3 mb-4" onclick="copyRefLink()">Скопировать ссылку</button>
-                    
                     <div class="section-title">ВАШИ РЕФЕРАЛЫ</div>
                     <div class="empty-state">Рефералов пока нет</div>
                 </div>
@@ -217,7 +214,24 @@
                     </div>
                 </div>
             </div>
-            
+
+            <!-- Quantum+ Screen -->
+            <div id="screen-plus" class="screen">
+                <div class="screen-header">
+                    <button class="back-btn" onclick="closeScreen()">‹ Назад</button>
+                    <div class="screen-title">⭐ Quantum+</div>
+                </div>
+                <div class="screen-content">
+                    <div class="info-block" id="plus-status-block">
+                        <div class="info-value" id="plus-status">Загрузка...</div>
+                    </div>
+                    <div id="plus-info" class="mt-3"></div>
+                    <button class="btn btn-primary full-width mt-4" id="plus-buy-btn" onclick="buyQuantumPlus()" style="display:none;">
+                        Купить Quantum+ (40 USDT)
+                    </button>
+                </div>
+            </div>
+
             <!-- Info Screen -->
             <div id="screen-info" class="screen">
                 <div class="screen-header">
@@ -228,13 +242,12 @@
                     <div class="info-text">
                         <h3>КАК ЭТО РАБОТАЕТ</h3>
                         <p><b>§01 Что такое Quantum</b><br>Автоматизированный агрегатор криптовалютных бирж.</p>
-                        <p><b>§02 Пополнение баланса</b><br>Через USDT (сеть TON).</p>
+                        <p><b>§02 Пополнение баланса</b><br>Через @xrocket (USDT). Комиссия 7% (3% для Quantum+).</p>
                         <p><b>§03 Работа со связками</b><br>Выберите монету, введите сумму, получайте прибыль.</p>
-                        <p><b>§04 Вывод средств</b><br>Минимум 30 USDT. Обработка 3-5 минут.</p>
-                        
+                        <p><b>§04 Вывод средств</b><br>Минимум 30 USDT. Комиссия 8%. Обработка 3-5 минут.</p>
                         <h3 class="mt-4">ПОДПИСКА QUANTUM+</h3>
-                        <p>Стоимость: 89 USDT / 30 дней.</p>
-                        <p>Преимущества: лимит 300 операций, 0% комиссия на вывод, приоритетная обработка.</p>
+                        <p>Стоимость: <b>40 USDT / 30 дней</b>.</p>
+                        <p>Преимущества: 300 операций, комиссия пополнения 3%, приоритетная обработка.</p>
                     </div>
                 </div>
             </div>
@@ -249,20 +262,24 @@
                     <div class="accordion" id="faq-accordion">
                         <div class="accordion-item" onclick="toggleAccordion(this)">
                             <div class="accordion-header">Q1: Что такое Quantum? <span class="chevron">^</span></div>
-                            <div class="accordion-content" style="display:none">Quantum — это автоматизированный арбитражный бот и агрегатор криптовалютных бирж, который помогает находить и использовать ценовые различия между торговыми площадками для извлечения прибыли.</div>
+                            <div class="accordion-content" style="display:none">Quantum — автоматизированный арбитражный бот и агрегатор криптовалютных бирж.</div>
                         </div>
                         <div class="accordion-item" onclick="toggleAccordion(this)">
-                            <div class="accordion-header">Q2: Как работает Quantum? <span class="chevron">^</span></div>
-                            <div class="accordion-content" style="display:none">Система обнаруживает арбитражную возможность и автоматически выполняет необходимые операции через API.</div>
+                            <div class="accordion-header">Q2: Какая комиссия на пополнение? <span class="chevron">^</span></div>
+                            <div class="accordion-content" style="display:none">7% для обычных пользователей, 3% для подписчиков Quantum+. Пример: вводите 100 USDT → зачисляется 93 USDT.</div>
                         </div>
                         <div class="accordion-item" onclick="toggleAccordion(this)">
-                            <div class="accordion-header">Q3: Получает ли Quantum доступ к моим средствам? <span class="chevron">^</span></div>
-                            <div class="accordion-content" style="display:none">Нет. Администрация не имеет прямого доступа к средствам пользователей.</div>
+                            <div class="accordion-header">Q3: Какая комиссия на вывод? <span class="chevron">^</span></div>
+                            <div class="accordion-content" style="display:none">8% от суммы вывода. Пример: выводите 100 USDT → получаете 92 USDT.</div>
+                        </div>
+                        <div class="accordion-item" onclick="toggleAccordion(this)">
+                            <div class="accordion-header">Q4: Что даёт Quantum+? <span class="chevron">^</span></div>
+                            <div class="accordion-content" style="display:none">300 операций в сутки (вместо 100), комиссия пополнения 3% (вместо 7%), приоритетная обработка заявок. Стоимость: 40 USDT / 30 дней.</div>
                         </div>
                     </div>
                 </div>
             </div>
-            
+
             <!-- Bottom Sheet for Launch Bundle -->
             <div id="bottom-sheet" class="bottom-sheet-overlay" onclick="closeBottomSheet(event)">
                 <div class="bottom-sheet">
@@ -304,11 +321,10 @@
                 <div class="tab-text">Прочее</div>
             </div>
         </nav>
-        
-        <!-- Toast Notification -->
+
         <div id="toast" class="toast">Уведомление</div>
     </div>
-    
+
     <script src="app.js"></script>
 </body>
 </html>
