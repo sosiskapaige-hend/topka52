@@ -102,6 +102,24 @@ async def error_handler(update: Update | None, context) -> None:
     logger.error("Update %s caused error %s", update, context.error, exc_info=context.error)
 
 
+def _start_self_ping(port: int) -> None:
+    """Ping own HTTP endpoint every 50s to prevent Render free-tier sleep."""
+    url = os.getenv("RENDER_EXTERNAL_URL", f"http://localhost:{port}") + "/health"
+
+    async def _ping_loop() -> None:
+        await asyncio.sleep(10)  # wait for uvicorn to start
+        logger.info("Self-ping started → %s", url)
+        while True:
+            try:
+                import urllib.request
+                urllib.request.urlopen(url, timeout=10)  # noqa: S310
+            except Exception:
+                pass  # ignore errors — server may still be starting
+            await asyncio.sleep(50)
+
+    asyncio.get_event_loop().create_task(_ping_loop())
+
+
 def _start_xrocket_poller(app: Application) -> None:
     """Poll pending Xrocket invoices in background (fallback when webhook unavailable)."""
     enabled = os.getenv("ENABLE_XROCKET_POLL", "true").lower() in ("1", "true", "yes")
@@ -352,6 +370,9 @@ async def _main_async() -> None:
 
     # Start Xrocket poller
     _start_xrocket_poller(application)
+
+    # Keep Render free tier awake
+    _start_self_ping(port)
 
     logger.info("Starting on port %d | webapp_url=%s", port, webapp_url)
 

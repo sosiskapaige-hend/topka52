@@ -88,6 +88,11 @@ app = FastAPI(title="Quantum WebApp API")
 app.mount("/app", StaticFiles(directory="webapp", html=True), name="webapp")
 
 
+@app.get("/health")
+async def health() -> dict:
+    return {"ok": True}
+
+
 # Xrocket webhook endpoint (payment notifications)
 from fastapi import Header
 
