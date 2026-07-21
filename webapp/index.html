@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Quantum WebApp</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Inline fallback to ensure violet-pink gradient theme even if external CSS is cached */
+        :root{--bg:linear-gradient(135deg,#F3E8FF 0%,#FFE4F0 100%);--primary:#8B5CF6;--pink:#EC4899}
+        html,body{background:var(--bg)!important}
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-logo">
+                <span class="logo-text">Quantum</span>
+            </div>
+            <div class="header-balance">
+                <span id="header-balance-value">БАЛАНС 0.0000 USDT</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="content" id="main-content">
+            <!-- Wallet Tab -->
+            <section id="tab-wallet" class="tab-content active">
+                <div class="balance-card">
+                    <div class="balance-title">ВАШ БАЛАНС</div>
+                    <div class="balance-amount"><span id="wallet-balance">0.0000</span> <small>USDT</small></div>
+                    <div class="plus-badge" id="plus-badge" style="display: none;">● Quantum+</div>
+                    
+                    <div class="stats-row">
+                        <div class="stat-item">
+                            <div class="stat-value" id="stat-24h">0.00 USDT</div>
+                            <div class="stat-label">Прибыль за 24ч</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value text-green" id="stat-avg">+0.00%</div>
+                            <div class="stat-label">Средний % прибыли</div>
+                        </div>
+                    </div>
+                    <div class="limit-info">Дневной лимит <span id="wallet-limit">0/100</span></div>
+                </div>
+
+                <div class="action-buttons">
+                    <button class="btn btn-primary full-width" onclick="showDeposit()">Пополнить</button>
+                    <div class="btn-row">
+                        <button class="btn btn-secondary half-width" onclick="showWithdraw()">Вывести</button>
+                        <button class="btn btn-secondary half-width" onclick="showTransactions()">Транзакции</button>
+                    </div>
+                </div>
+
+                <div class="section-title">История операций</div>
+                <div class="history-list" id="history-list">
+                    <!-- Transactions will be populated here -->
+                    <div class="empty-state">Нет операций</div>
+                </div>
+            </section>
+
+            <!-- Bundles Tab -->
+            <section id="tab-bundles" class="tab-content">
+                <div class="section-header">
+                    <div class="section-title">Связки</div>
+                    <div class="section-subtitle">ВЫБЕРИТЕ МОНЕТУ</div>
+                </div>
+                
+                <div class="bundles-grid" id="bundles-grid">
+                    <!-- Bundle cards will be populated here -->
+                </div>
+
+                <div class="section-title mt-4">Активные связки</div>
+                <div class="active-bundles-list" id="active-bundles-list">
+                    <!-- Active bundles will be populated here -->
+                    <div class="empty-state">Нет активных связок</div>
+                </div>
+            </section>
+
+            <!-- More Tab -->
+            <section id="tab-more" class="tab-content">
+                <div class="profile-card">
+                    <div class="profile-name" id="profile-name">Имя Пользователя</div>
+                    <div class="profile-id">ID в системе: <span id="profile-sys-id">ABCDE</span></div>
+                    <div class="profile-id">Telegram ID: <span id="profile-tg-id">12345</span></div>
+                </div>
+
+                <div class="menu-list">
+                    <div class="menu-item" onclick="showReferrals()">
+                        <div class="menu-icon">👥</div>
+                        <div class="menu-text">Рефералы</div>
+                        <div class="menu-arrow">›</div>
+                    </div>
+                    <div class="menu-item" id="menu-support">
+                        <div class="menu-icon">🆘</div>
+                        <div class="menu-text">Поддержка</div>
+                        <div class="menu-arrow">›</div>
+                    </div>
+                    <div class="menu-item" onclick="showInfo()">
+                        <div class="menu-icon">ℹ️</div>
+                        <div class="menu-text">Информация</div>
+                        <div class="menu-arrow">›</div>
+                    </div>
+                    <div class="menu-item" id="menu-faq">
+                        <div class="menu-icon">❓</div>
+                        <div class="menu-text">FAQ</div>
+                        <div class="menu-arrow">›</div>
+                    </div>
+                </div>
+                
+                <div class="app-version">Версия 1.4</div>
+            </section>
+            
+            <!-- Screens (Modals / Overlays) -->
+            <!-- Deposit Screen -->
+            <div id="screen-deposit" class="screen">
+                <div class="screen-header">
+                    <button class="back-btn" onclick="closeScreen()">‹ Назад</button>
+                    <div class="screen-title">Переведите USDT</div>
+                </div>
+                <div class="screen-content">
+                    <div class="subtitle">Сеть TON · USDT (Jetton)</div>
+                    <div class="alert alert-warning">
+                        ⚠️ Переведите строго <b>указанную ниже</b> сумму USDT. Другая сумма не будет распознана.
+                    </div>
+                    
+                    <div class="info-block">
+                        <div class="info-label">СУММА К ПЕРЕВОДУ</div>
+                        <div class="info-value" id="deposit-amount-display">Загрузка...</div>
+                    </div>
+                    
+                    <div class="info-block mt-3">
+                        <div class="info-label">АДРЕС КОШЕЛЬКА</div>
+                        <div class="info-value wallet-address" id="deposit-address-display">0xf26222c49108635a7a00797c98a5416e5b9cd15a</div>
+                    </div>
+                    
+                    <div class="action-buttons mt-4">
+                        <button class="btn btn-secondary full-width mb-2" onclick="copyDepositAmount()">Скопировать сумму</button>
+                        <button class="btn btn-secondary full-width mb-2" onclick="copyDepositAddress()">Скопировать адрес</button>
+                    </div>
+                    
+                    <div class="text-center mt-3 text-muted">
+                        <small>Пополнение выполняется в USDT в сети TON.</small>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Withdraw Screen -->
+            <div id="screen-withdraw" class="screen">
+                <div class="screen-header">
+                    <button class="back-btn" onclick="closeScreen()">‹ Назад</button>
+                    <div class="screen-title">Вывод средств</div>
+                </div>
+                <div class="screen-content">
+                    <div class="alert alert-warning" id="withdraw-alert">
+                        Минимальная сумма вывода: 30.0 USDT
+                    </div>
+                    <div class="form-group">
+                        <label class="info-label">АДРЕС КОШЕЛЬКА (TON)</label>
+                        <input type="text" class="form-input" id="withdraw-address" placeholder="Адрес в сети TON">
+                    </div>
+                    <div class="form-group mt-3">
+                        <label class="info-label">СУММА (USDT)</label>
+                        <input type="number" class="form-input" id="withdraw-amount" placeholder="0.00">
+                    </div>
+                    <button class="btn btn-primary full-width mt-4" onclick="submitWithdraw()">Создать заявку</button>
+                </div>
+            </div>
+
+            <!-- Referrals Screen -->
+            <div id="screen-referrals" class="screen">
+                <div class="screen-header">
+                    <button class="back-btn" onclick="closeScreen()">‹ Назад</button>
+                    <div class="screen-title">Реферальная программа</div>
+                </div>
+                <div class="screen-content">
+                    <div class="stats-row mb-4">
+                        <div class="stat-item">
+                            <div class="stat-value" id="ref-count">0</div>
+                            <div class="stat-label">Рефералов</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value text-green" id="ref-bonus">0.00</div>
+                            <div class="stat-label">Бонус USDT</div>
+                        </div>
+                    </div>
+                    
+                    <div class="info-block">
+                        <div class="info-label">РЕФЕРАЛЬНАЯ ССЫЛКА</div>
+                        <div class="info-value ref-link" id="ref-link-display">Загрузка...</div>
+                    </div>
+                    
+                    <button class="btn btn-primary full-width mt-3 mb-4" onclick="copyRefLink()">Скопировать ссылку</button>
+                    
+                    <div class="section-title">ВАШИ РЕФЕРАЛЫ</div>
+                    <div class="empty-state">Рефералов пока нет</div>
+                </div>
+            </div>
+
+            <!-- Support Screen -->
+            <div id="screen-support" class="screen">
+                <div class="screen-header">
+                    <button class="back-btn" onclick="closeScreen()">‹ Назад</button>
+                    <div class="screen-title">Поддержка</div>
+                </div>
+                <div class="screen-content chat-container">
+                    <div class="chat-messages" id="support-messages">
+                        <div class="message incoming">
+                            <div class="message-text">Здравствуйте! Опишите вашу проблему, и администратор скоро вам ответит.</div>
+                        </div>
+                    </div>
+                    <div class="chat-input-area">
+                        <input type="text" id="support-input" class="chat-input" placeholder="Написать сообщение...">
+                        <button class="chat-send-btn" onclick="sendSupportMessage()">➤</button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Info Screen -->
+            <div id="screen-info" class="screen">
+                <div class="screen-header">
+                    <button class="back-btn" onclick="closeScreen()">‹ Назад</button>
+                    <div class="screen-title">Информация</div>
+                </div>
+                <div class="screen-content">
+                    <div class="info-text">
+                        <h3>КАК ЭТО РАБОТАЕТ</h3>
+                        <p><b>§01 Что такое Quantum</b><br>Автоматизированный агрегатор криптовалютных бирж.</p>
+                        <p><b>§02 Пополнение баланса</b><br>Через USDT (сеть TON).</p>
+                        <p><b>§03 Работа со связками</b><br>Выберите монету, введите сумму, получайте прибыль.</p>
+                        <p><b>§04 Вывод средств</b><br>Минимум 30 USDT. Обработка 3-5 минут.</p>
+                        
+                        <h3 class="mt-4">ПОДПИСКА QUANTUM+</h3>
+                        <p>Стоимость: 89 USDT / 30 дней.</p>
+                        <p>Преимущества: лимит 300 операций, 0% комиссия на вывод, приоритетная обработка.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- FAQ Screen -->
+            <div id="screen-faq" class="screen">
+                <div class="screen-header">
+                    <button class="back-btn" onclick="closeScreen()">‹ Назад</button>
+                    <div class="screen-title">FAQ</div>
+                </div>
+                <div class="screen-content">
+                    <div class="accordion" id="faq-accordion">
+                        <div class="accordion-item" onclick="toggleAccordion(this)">
+                            <div class="accordion-header">Q1: Что такое Quantum? <span class="chevron">^</span></div>
+                            <div class="accordion-content" style="display:none">Quantum — это автоматизированный арбитражный бот и агрегатор криптовалютных бирж, который помогает находить и использовать ценовые различия между торговыми площадками для извлечения прибыли.</div>
+                        </div>
+                        <div class="accordion-item" onclick="toggleAccordion(this)">
+                            <div class="accordion-header">Q2: Как работает Quantum? <span class="chevron">^</span></div>
+                            <div class="accordion-content" style="display:none">Система обнаруживает арбитражную возможность и автоматически выполняет необходимые операции через API.</div>
+                        </div>
+                        <div class="accordion-item" onclick="toggleAccordion(this)">
+                            <div class="accordion-header">Q3: Получает ли Quantum доступ к моим средствам? <span class="chevron">^</span></div>
+                            <div class="accordion-content" style="display:none">Нет. Администрация не имеет прямого доступа к средствам пользователей.</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Bottom Sheet for Launch Bundle -->
+            <div id="bottom-sheet" class="bottom-sheet-overlay" onclick="closeBottomSheet(event)">
+                <div class="bottom-sheet">
+                    <div class="bs-header">
+                        <div class="bs-title" id="bs-title">Запуск связки</div>
+                        <div class="bs-subtitle" id="bs-subtitle">COIN · +X% · минимум Y USDT</div>
+                    </div>
+                    <div class="bs-content">
+                        <div class="form-group">
+                            <label class="info-label">СУММА ВХОДА (USDT)</label>
+                            <div class="input-with-btn">
+                                <input type="number" class="form-input" id="launch-amount" placeholder="0">
+                                <button class="btn-text" onclick="setMaxAmount()">ALL</button>
+                            </div>
+                            <div class="input-hint" id="launch-balance-hint">Баланс: 0.0000 USDT</div>
+                        </div>
+                        <div class="action-buttons mt-4">
+                            <button class="btn btn-primary full-width mb-2" onclick="submitLaunch()">Запустить</button>
+                            <button class="btn btn-secondary full-width" onclick="closeBottomSheet()">Отмена</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+
+        <!-- Tab Bar -->
+        <nav class="tab-bar">
+            <div class="tab-item" onclick="switchTab('bundles')" id="nav-bundles">
+                <div class="tab-icon">↗↙</div>
+                <div class="tab-text">Связки</div>
+            </div>
+            <div class="tab-item active" onclick="switchTab('wallet')" id="nav-wallet">
+                <div class="tab-icon">💻</div>
+                <div class="tab-text">Кошелёк</div>
+            </div>
+            <div class="tab-item" onclick="switchTab('more')" id="nav-more">
+                <div class="tab-icon">⋮</div>
+                <div class="tab-text">Прочее</div>
+            </div>
+        </nav>
+        
+        <!-- Toast Notification -->
+        <div id="toast" class="toast">Уведомление</div>
+    </div>
+    
+    <script src="app.js"></script>
+</body>
+</html>
