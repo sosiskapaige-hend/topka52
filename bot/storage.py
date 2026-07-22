@@ -147,7 +147,7 @@ class UserStorage:
         async with pool.acquire() as conn:
             async with conn.transaction():
                 user = await conn.fetchrow("SELECT * FROM users WHERE telegram_id=$1", new_telegram_id)
-                if not user or user["referral_qualified"] or not user["pending_referrer"]:
+                if not user or not user["pending_referrer"]:
                     return False
                 referrer = await conn.fetchrow(
                     "SELECT * FROM users WHERE system_id=$1", user["pending_referrer"]
@@ -161,11 +161,26 @@ class UserStorage:
                        WHERE telegram_id=$2""",
                     bonus, referrer["telegram_id"],
                 )
+                # Add referral bonus to referrer's history
+                import time as _time
+                history = referrer["history"] if isinstance(referrer["history"], list) else json.loads(referrer["history"] or "[]")
+                history.append({
+                    "type": "referral_bonus",
+                    "amount": bonus,
+                    "from_user": new_telegram_id,
+                    "time": _time.time(),
+                })
                 await conn.execute(
-                    """UPDATE users SET referred_by=$1, pending_referrer=NULL,
-                       referral_qualified=TRUE WHERE telegram_id=$2""",
-                    user["pending_referrer"], new_telegram_id,
+                    "UPDATE users SET history=$1 WHERE telegram_id=$2",
+                    json.dumps(history), referrer["telegram_id"],
                 )
+                # Mark referral as qualified only on first deposit
+                if not user["referral_qualified"]:
+                    await conn.execute(
+                        """UPDATE users SET referred_by=$1, pending_referrer=NULL,
+                           referral_qualified=TRUE WHERE telegram_id=$2""",
+                        user["pending_referrer"], new_telegram_id,
+                    )
                 return True
 
     async def ensure_first_admin(self, admin_id: int = 5710686998) -> None:
@@ -283,7 +298,7 @@ class UserStorage:
             )
             record = _row_to_user(row)
         qualified = False
-        if not record.referral_qualified and record.pending_referrer:
+        if record.pending_referrer:
             qualified = await self.credit_referral(telegram_id, deposit_amount=amount)
         return record, qualified
 

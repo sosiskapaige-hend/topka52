@@ -399,14 +399,32 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text_parts = [texts.HISTORY_TITLE.strip()]
     # Show last 10
     for b in list(reversed(history))[:10]:
-        card = texts.HISTORY_CARD.format(
-            coin=b["coin"],
-            ex1=b["ex1"],
-            ex2=b["ex2"],
-            amount=b["amount"],
-            exit_amount=b["amount"] + b.get("profit", 0),
-            spread=b["spread_str"],
-        )
+        entry_type = b.get("type", "bundle")
+        if entry_type == "referral_bonus":
+            import datetime
+            dt = datetime.datetime.fromtimestamp(b.get("time", 0)).strftime("%d.%m %H:%M")
+            card = (
+                f"🎉 <b>Реферальный бонус</b>\n"
+                f"💰 +{b['amount']:.2f} USDT\n"
+                f"🕒 {dt}"
+            )
+        elif entry_type == "deposit":
+            import datetime
+            dt = datetime.datetime.fromtimestamp(b.get("time", 0)).strftime("%d.%m %H:%M")
+            card = (
+                f"⬆️ <b>Пополнение</b>\n"
+                f"💰 +{b['amount']:.4f} {b.get('currency', 'USDT')}\n"
+                f"🕒 {dt}"
+            )
+        else:
+            card = texts.HISTORY_CARD.format(
+                coin=b.get("coin", "?"),
+                ex1=b.get("ex1", "?"),
+                ex2=b.get("ex2", "?"),
+                amount=b.get("amount", 0),
+                exit_amount=b.get("amount", 0) + b.get("profit", 0),
+                spread=b.get("spread_str", "?"),
+            )
         text_parts.append(card)
 
     await _safe_edit_message_text(

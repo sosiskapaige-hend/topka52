@@ -148,15 +148,16 @@ async def try_complete_payment(
 
 
 async def _notify_referrer(storage: UserStorage, referral_record) -> None:
-    """Send notification to referrer about new referral bonus."""
-    if not referral_record.referred_by:
+    """Send notification to referrer about referral bonus."""
+    if not referral_record.referred_by and not referral_record.pending_referrer:
         return
+    ref_system_id = referral_record.referred_by or referral_record.pending_referrer
     try:
         from bot.db import get_pool
         pool = await get_pool()
         async with pool.acquire() as conn:
             referrer_row = await conn.fetchrow(
-                "SELECT * FROM users WHERE system_id=$1", referral_record.referred_by
+                "SELECT * FROM users WHERE system_id=$1", ref_system_id
             )
         if not referrer_row:
             return
@@ -164,17 +165,26 @@ async def _notify_referrer(storage: UserStorage, referral_record) -> None:
         if not (hasattr(main, "ptb_app") and main.ptb_app):
             return
         from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-        from bot.constants import CB_REFERRALS
+        from bot.constants import CB_REFERRALS, REFERRAL_COMMISSION
+        # Find the latest referral_bonus entry to get exact bonus amount
+        history = referrer_row["history"] if isinstance(referrer_row["history"], list) else []
+        bonus = next(
+            (e["amount"] for e in reversed(history) if e.get("type") == "referral_bonus" and e.get("from_user") == referral_record.telegram_id),
+            0.0
+        )
+        pct = int(REFERRAL_COMMISSION * 100)
         await main.ptb_app.bot.send_message(
             chat_id=referrer_row["telegram_id"],
             text=(
-                f"🎉 <b>Новый реферал!</b>\n\n"
-                f"Ваш реферал пополнил баланс.\n"
-                f"Ваш бонус: <b>+{referrer_row['referral_bonus']:.2f} USDT</b>\n"
-                f"Всего заработано: <b>{referrer_row['referral_bonus']:.2f} USDT</b>"
+                f"🎉 <b>Реферальный бонус получен!</b>\n"
+                f"────────────────────\n"
+                f"👤 Ваш реферал пополнил баланс\n"
+                f"💰 Вам начислено: <b>+{bonus:.2f} USDT</b> ({pct}%)\n"
+                f"📊 Всего заработано: <b>{referrer_row['referral_bonus']:.2f} USDT</b>\n"
+                f"────────────────────"
             ),
             parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👥 Рефералы", callback_data=CB_REFERRALS)]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👥 Мои рефералы", callback_data=CB_REFERRALS)]])
         )
     except Exception as e:
         logger.error("Failed to notify referrer: %s", e)
