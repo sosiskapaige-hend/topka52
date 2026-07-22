@@ -1086,7 +1086,8 @@ async def withdraw_address_handler(update: Update, context: ContextTypes.DEFAULT
         user_id=user.id,
         username=uname,
         amount=net_amount,
-        address=address
+        amount_requested=amount,
+        address=address,
     )
 
     keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Главное меню", callback_data=CB_MAIN)]])

@@ -84,12 +84,15 @@ async def _create_tables(pool: asyncpg.Pool) -> None:
             );
 
             CREATE TABLE IF NOT EXISTS withdrawals (
-                withdraw_id   VARCHAR(10) PRIMARY KEY,
-                user_id       BIGINT NOT NULL,
-                username      TEXT NOT NULL,
-                amount        DOUBLE PRECISION NOT NULL,
-                address       TEXT NOT NULL,
-                status        VARCHAR(10) NOT NULL DEFAULT 'pending',
-                reject_reason TEXT
+                withdraw_id      VARCHAR(10) PRIMARY KEY,
+                user_id          BIGINT NOT NULL,
+                username         TEXT NOT NULL,
+                amount           DOUBLE PRECISION NOT NULL,
+                amount_requested DOUBLE PRECISION NOT NULL DEFAULT 0,
+                address          TEXT NOT NULL,
+                status           VARCHAR(10) NOT NULL DEFAULT 'pending',
+                reject_reason    TEXT
             );
+
+            ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS amount_requested DOUBLE PRECISION NOT NULL DEFAULT 0;
         """)

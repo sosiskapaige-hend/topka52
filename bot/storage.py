@@ -401,7 +401,14 @@ class PaymentStorage:
 # ── WithdrawStorage ───────────────────────────────────────────────────────────
 
 class WithdrawStorage:
-    async def create_withdrawal(self, user_id: int, username: str, amount: float, address: str) -> str:
+    async def create_withdrawal(
+        self,
+        user_id: int,
+        username: str,
+        amount: float,
+        address: str,
+        amount_requested: float | None = None,
+    ) -> str:
         pool = await get_pool()
         async with pool.acquire() as conn:
             while True:
@@ -410,8 +417,8 @@ class WithdrawStorage:
                 if not exists:
                     break
             await conn.execute(
-                "INSERT INTO withdrawals (withdraw_id, user_id, username, amount, address) VALUES ($1,$2,$3,$4,$5)",
-                wid, user_id, username, amount, address,
+                "INSERT INTO withdrawals (withdraw_id, user_id, username, amount, amount_requested, address) VALUES ($1,$2,$3,$4,$5,$6)",
+                wid, user_id, username, amount, amount_requested if amount_requested is not None else amount, address,
             )
             return wid
 

@@ -672,6 +672,7 @@ async def request_withdraw(
         user_id=uid,
         username=uname_str,
         amount=net_amount,
+        amount_requested=req.amount,
         address=req.address,
     )
 

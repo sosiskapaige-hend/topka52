@@ -16,6 +16,7 @@ from bot.constants import (
     CB_ADMIN_WITHDRAW_APPROVE,
     CB_ADMIN_WITHDRAW_REJECT,
     CB_MAIN,
+    WITHDRAW_COMMISSION,
 )
 
 logger = logging.getLogger(__name__)
