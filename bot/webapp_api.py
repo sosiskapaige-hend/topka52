@@ -210,31 +210,39 @@ async def _start_bundle_completer():
                         duration = b.get("duration", 60)
                         if now >= start + duration:
                             profit = b.get("profit", 0)
-                            logger.info("Completing expired bundle %s for user %s", b["id"], uid)
-                            completed = await _storage.complete_bundle(uid, b["id"], profit)
-                            if completed and getattr(_main, "ptb_app", None):
-                                try:
-                                    from bot import texts
-                                    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-                                    from bot.constants import CB_MAIN
-                                    record = await _storage.get_or_create(uid)
-                                    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data=CB_MAIN)]])
-                                    await _main.ptb_app.bot.send_message(
-                                        chat_id=uid,
-                                        text=texts.HISTORY_FINISH_NOTIFICATION.format(
-                                            coin=completed["coin"],
-                                            ex1=completed["ex1"],
-                                            ex2=completed["ex2"],
-                                            amount=completed["amount"],
-                                            exit_amount=completed["amount"] + profit,
-                                            profit=profit,
-                                            spread=completed["spread_str"],
-                                            balance=record.balance,
-                                        ),
-                                        reply_markup=keyboard,
-                                    )
-                                except Exception as e:
-                                    logger.error("Failed to notify user %s about bundle completion: %s", uid, e)
+                            bundle_id = b["id"]
+                            logger.info("Completing bundle %s user %s profit %.4f", bundle_id, uid, profit)
+                            completed = await _storage.complete_bundle(uid, bundle_id, profit)
+                            if not completed:
+                                logger.warning("complete_bundle returned None for bundle %s user %s", bundle_id, uid)
+                                continue
+                            ptb = getattr(_main, "ptb_app", None)
+                            if not ptb:
+                                logger.warning("ptb_app is None, cannot notify user %s", uid)
+                                continue
+                            try:
+                                from bot import texts
+                                from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+                                from bot.constants import CB_MAIN
+                                record = await _storage.get_or_create(uid)
+                                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data=CB_MAIN)]])
+                                await ptb.bot.send_message(
+                                    chat_id=uid,
+                                    text=texts.HISTORY_FINISH_NOTIFICATION.format(
+                                        coin=completed["coin"],
+                                        ex1=completed.get("ex1", ""),
+                                        ex2=completed.get("ex2", ""),
+                                        amount=completed["amount"],
+                                        exit_amount=completed["amount"] + profit,
+                                        profit=profit,
+                                        spread=completed.get("spread_str", ""),
+                                        balance=record.balance,
+                                    ),
+                                    reply_markup=keyboard,
+                                )
+                                logger.info("Notified user %s about bundle %s completion", uid, bundle_id)
+                            except Exception as e:
+                                logger.error("Failed to notify user %s about bundle %s: %s", uid, bundle_id, e)
             except Exception as e:
                 logger.error("Bundle completer error: %s", e)
             await asyncio.sleep(30)
