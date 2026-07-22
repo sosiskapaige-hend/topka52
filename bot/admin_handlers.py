@@ -479,9 +479,16 @@ async def admin_withdraw_reject_reason(update: Update, context: ContextTypes.DEF
         return ConversationHandler.END
 
     # Refund balance (was deducted on request creation)
+    amount_requested = w.get("amount_requested")
+    if amount_requested is None or amount_requested == 0:
+        # Fallback for older records that only stored net amount.
+        amount_to_refund = round(w["amount"] / (1 - WITHDRAW_COMMISSION), 4)
+    else:
+        amount_to_refund = amount_requested
+
     storage = _storage(context)
     record = await storage.get_or_create(w["user_id"])
-    await storage.update_user(w["user_id"], balance=record.balance + w["amount"])
+    await storage.update_user(w["user_id"], balance=record.balance + amount_to_refund)
 
     # Notify user
     try:
