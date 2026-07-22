@@ -248,9 +248,9 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Неверные параметры.")
         return
     storage = _storage(context)
-    record = await storage.get_or_create(target_id)
-    await storage.update_user(target_id, balance=record.balance + amount)
-    await update.message.reply_text(f"✅ Баланс пользователя {target_id} пополнен на {amount:.2f}$.")
+    await storage.get_or_create(target_id)
+    await storage.process_deposit(target_id, amount)
+    await update.message.reply_text(f"✅ Баланс пользователя {target_id} пополнен на {amount:.2f} USDT (учтено как депозит).")
 
 
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

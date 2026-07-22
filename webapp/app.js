@@ -323,16 +323,28 @@ function setMaxAmount() {
 async function submitLaunch() {
     const coin   = state.selectedCoin;
     const amount = parseFloat(document.getElementById('launch-amount').value);
-    if (!coin)   { showToast('Монета не выбрана', true); return; }
-    if (!amount) { showToast('Введите сумму', true); return; }
+    if (!coin)         { showToast('Монета не выбрана', true); return; }
+    if (!amount || isNaN(amount)) { showToast('Введите сумму', true); return; }
+    if (amount > (state.balance || 0)) { showToast('Недостаточно средств', true); return; }
+
+    const btn = document.getElementById('launch-submit-btn');
+    const origText = btn?.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = 'Запускаем...'; }
+
     try {
         await post('/api/bundles/launch', { coin, amount });
-        showToast(`Связка ${coin} запущена!`);
+        showToast(`✅ Связка ${coin} запущена!`);
         closeBottomSheet();
-        setTimeout(() => { loadBundles(); loadWallet(); }, 800);
+        state.balance -= amount;
+        if (state.me) state.me.balance = state.balance;
+        setTimeout(() => { loadBundles(); loadWallet(); }, 600);
         tg?.HapticFeedback?.notificationOccurred('success');
     } catch (e) {
-        showToast(e.message || 'Ошибка запуска', true);
+        const msg = e.message || 'Ошибка запуска';
+        showToast(`❌ ${msg}`, true);
+        tg?.HapticFeedback?.notificationOccurred('error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = origText; }
     }
 }
 
