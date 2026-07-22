@@ -422,12 +422,6 @@ async def admin_withdraw_approve(update: Update, context: ContextTypes.DEFAULT_T
         await query.answer("Заявка уже обработана.", show_alert=True)
         return
 
-    # Deduct balance from user
-    storage = _storage(context)
-    record = await storage.get_or_create(w["user_id"])
-    new_balance = max(0.0, record.balance - w["amount"])
-    await storage.update_user(w["user_id"], balance=new_balance)
-
     # Notify user
     try:
         await context.bot.send_message(
@@ -483,6 +477,11 @@ async def admin_withdraw_reject_reason(update: Update, context: ContextTypes.DEF
         await update.message.reply_text("⚠️ Заявка не найдена или уже обработана.")
         return ConversationHandler.END
 
+    # Refund balance (was deducted on request creation)
+    storage = _storage(context)
+    record = await storage.get_or_create(w["user_id"])
+    await storage.update_user(w["user_id"], balance=record.balance + w["amount"])
+
     # Notify user
     try:
         await context.bot.send_message(
@@ -490,7 +489,7 @@ async def admin_withdraw_reject_reason(update: Update, context: ContextTypes.DEF
             text=(
                 f"❌ <b>Заявка на вывод #{w['withdraw_id']} отклонена</b>\n\n"
                 f"Причина: {html.escape(reason)}\n\n"
-                f"Средства остались на вашем балансе. Обратитесь в поддержку при необходимости."
+                f"Средства возвращены на ваш баланс."
             ),
             parse_mode="HTML",
         )
