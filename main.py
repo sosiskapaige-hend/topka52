@@ -121,47 +121,6 @@ def _start_self_ping(port: int) -> None:
     asyncio.get_event_loop().create_task(_ping_loop())
 
 
-def _start_xrocket_poller(app: Application) -> None:
-    """Poll pending Xrocket invoices in background (fallback when webhook unavailable)."""
-    enabled = os.getenv("ENABLE_XROCKET_POLL", "true").lower() in ("1", "true", "yes")
-    if not enabled:
-        return
-
-    interval = int(os.getenv("XROCKET_POLL_INTERVAL", "60"))
-
-    async def _poll_loop() -> None:
-        import bot.xrocket_client_prod as xrocket
-        from bot.payments_service import invoice_is_paid, try_complete_payment, schedule_deposit_notification
-
-        logger.info("Xrocket invoice poller started (interval=%ds)", interval)
-        while True:
-            try:
-                payments: PaymentStorage | None = app.bot_data.get("payments")
-                storage: UserStorage | None = app.bot_data.get("storage")
-                if payments and storage:
-                    for rec in await payments.get_pending_payments():
-                        invoice_id = rec.get("invoice_id")
-                        if not invoice_id:
-                            continue
-                        try:
-                            info = await xrocket.get_invoice(str(invoice_id))
-                            if not invoice_is_paid(info):
-                                continue
-                            result = await try_complete_payment(
-                                payments, storage, str(invoice_id),
-                                external_meta=info if isinstance(info, dict) else None,
-                            )
-                            if result:
-                                schedule_deposit_notification(result)
-                                logger.info("Poller credited invoice %s → user %s", invoice_id, result["user_id"])
-                        except Exception as e:
-                            logger.error("Poller error for invoice %s: %s", invoice_id, e)
-            except Exception as e:
-                logger.error("Xrocket poller loop error: %s", e)
-            await asyncio.sleep(interval)
-
-    asyncio.get_event_loop().create_task(_poll_loop())
-
 
 def _build_application(webapp_url: str | None, bot_name: str) -> Application:
     """Build and configure the PTB Application."""
@@ -403,10 +362,7 @@ async def _main_async() -> None:
     webapp_api._withdrawals = application.bot_data["withdrawals"]
     webapp_api._payments = application.bot_data["payments"]
 
-    # Start Xrocket poller
-    _start_xrocket_poller(application)
-
-    # Keep Render free tier awake
+    # Start Xrocket poller and bundle completer via webapp_api startup events
     _start_self_ping(port)
 
     logger.info("Starting on port %d | webapp_url=%s", port, webapp_url)

@@ -93,6 +93,4 @@ async def _create_tables(pool: asyncpg.Pool) -> None:
                 status           VARCHAR(10) NOT NULL DEFAULT 'pending',
                 reject_reason    TEXT
             );
-
-            ALTER TABLE withdrawals ADD COLUMN IF NOT EXISTS amount_requested DOUBLE PRECISION NOT NULL DEFAULT 0;
         """)

@@ -185,10 +185,16 @@ async def xrocket_webhook_alt(request: Request, x_sig: str | None = Depends(_xro
 
 # ── Payment poller (startup) ──────────────────────────────────────────────────
 
-@app.on_event("startup")
-async def _start_bundle_completer():
-    """Background loop that completes expired bundles every 30s."""
-    async def _loop():
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    asyncio.create_task(_bundle_completer_loop())
+    yield
+
+
+async def _bundle_completer_loop():
         import json as _json
         from bot.db import get_pool
 
@@ -262,41 +268,7 @@ async def _start_bundle_completer():
     asyncio.create_task(_loop())
 
 
-@app.on_event("startup")
-async def _start_payment_poller():
-    interval = int(os.getenv("XROCKET_POLL_INTERVAL", "60"))
-    if os.getenv("ENABLE_XROCKET_POLL", "true").lower() not in ("1", "true", "yes"):
-        return
-
-    async def _poll_loop():
-        import bot.xrocket_client_prod as xrocket
-        from bot.payments_service import invoice_is_paid, try_complete_payment, schedule_deposit_notification
-        while True:
-            try:
-                payments = get_payments()
-                storage = get_storage()
-                pending = await payments.get_pending_payments()
-                for rec in pending:
-                    invoice_id = rec.get("invoice_id")
-                    if not invoice_id:
-                        continue
-                    try:
-                        info = await xrocket.get_invoice(str(invoice_id))
-                        if not invoice_is_paid(info):
-                            continue
-                        result = await try_complete_payment(
-                            payments, storage, str(invoice_id),
-                            external_meta=info if isinstance(info, dict) else None,
-                        )
-                        if result:
-                            schedule_deposit_notification(result)
-                    except Exception as e:
-                        logger.error("Poller error for invoice %s: %s", invoice_id, e)
-            except Exception as e:
-                logger.error("Xrocket poller loop failed: %s", e)
-            await asyncio.sleep(interval)
-
-    asyncio.create_task(_poll_loop())
+# Payment poller runs in main.py only — removed duplicate here
 
 
 # ── API endpoints ─────────────────────────────────────────────────────────────
@@ -659,6 +631,13 @@ async def request_withdraw(
 
     net_amount = round(req.amount * (1 - WITHDRAW_COMMISSION), 4)
     await storage.update_user(uid, balance=record.balance - req.amount)
+    # Record withdrawal in transaction history
+    await storage.append_deposit_history(uid, {
+        "type": "withdrawal",
+        "amount": req.amount,
+        "net_amount": net_amount,
+        "time": time.time(),
+    })
 
     import html
     name = user.get("first_name", "")

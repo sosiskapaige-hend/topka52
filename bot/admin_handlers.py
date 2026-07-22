@@ -250,6 +250,8 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     storage = _storage(context)
     await storage.get_or_create(target_id)
+    record_pre = await storage.get_or_create(target_id)
+    ref_system_id = record_pre.pending_referrer
     record, referral_bonus = await storage.process_deposit(target_id, amount)
     import time as _time
     await storage.append_deposit_history(target_id, {
@@ -258,9 +260,9 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "currency": "USDT",
         "time": _time.time(),
     })
-    if referral_bonus:
+    if referral_bonus and ref_system_id:
         from bot.payments_service import _notify_referrer
-        await _notify_referrer(storage, record, bonus=referral_bonus)
+        await _notify_referrer(ref_system_id, referral_bonus)
     await update.message.reply_text(f"✅ Баланс пользователя {target_id} пополнен на {amount:.2f} USDT (учтено как депозит).")
 
 

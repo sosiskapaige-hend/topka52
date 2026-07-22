@@ -183,37 +183,6 @@ async def show_bundle_launch(update: Update, context: ContextTypes.DEFAULT_TYPE)
     return BUNDLE_AMOUNT
 
 
-async def _finish_bundle_task(application, duration: int, user_id: int, bundle_id: str, profit: float) -> None:
-    import asyncio
-    await asyncio.sleep(duration)
-    
-    storage = application.bot_data["storage"]
-    completed = await storage.complete_bundle(user_id, bundle_id, profit)
-    
-    if completed:
-        try:
-            record = await storage.get_or_create(user_id)
-            from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-            from bot.constants import CB_MAIN
-            
-            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data=CB_MAIN)]])
-            await application.bot.send_message(
-                chat_id=user_id,
-                text=texts.HISTORY_FINISH_NOTIFICATION.format(
-                    coin=completed["coin"],
-                    ex1=completed["ex1"],
-                    ex2=completed["ex2"],
-                    amount=completed["amount"],
-                    exit_amount=completed["amount"] + profit,
-                    profit=profit,
-                    spread=completed["spread_str"],
-                    balance=record.balance
-                ),
-                reply_markup=keyboard
-            )
-        except Exception as e:
-            logger.error(f"Failed to send bundle finish notification to {user_id}: {e}")
-
 async def bundle_amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if update.message is None:
         return BUNDLE_AMOUNT
