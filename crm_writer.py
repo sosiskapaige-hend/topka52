@@ -171,10 +171,7 @@ class Attachment(Base):
 
 class CRMWriter:
     def __init__(self, database_url: str):
-        # Decode HTML entities (e.g. &amp; -> &) that may appear when copying from web UI
         database_url = database_url.replace("&amp;", "&")
-        # asyncpg doesn't accept query params like sslmode/channel_binding
-        # Strip all query params and pass ssl via connect_args
         from urllib.parse import urlparse, urlunparse, parse_qs
         parsed = urlparse(database_url)
         params = parse_qs(parsed.query)
@@ -184,6 +181,7 @@ class CRMWriter:
         if clean_url.startswith("postgresql://"):
             clean_url = clean_url.replace("postgresql://", "postgresql+asyncpg://", 1)
         connect_args = {"ssl": "require"} if ssl_required else {}
+        logger.info("crm_writer: connecting to %s (ssl=%s)", clean_url.split("@")[-1], ssl_required)
         self._engine = create_async_engine(
             clean_url, pool_size=3, max_overflow=5, connect_args=connect_args
         )
@@ -197,10 +195,6 @@ class CRMWriter:
     # ------------------------------------------------------------------
 
     async def save_update(self, update, context=None) -> None:
-        """
-        Top-level entry point. Pass any python-telegram-bot Update object.
-        Handles: message, edited_message, channel_post, callback_query.
-        """
         try:
             async with self._session_factory() as session:
                 async with session.begin():
@@ -212,8 +206,9 @@ class CRMWriter:
                         await self._handle_message(session, update.channel_post, is_edit=False)
                     elif update.callback_query and update.callback_query.message:
                         await self._handle_callback(session, update.callback_query)
-        except Exception:
-            logger.exception("crm_writer: failed to save update %s", getattr(update, "update_id", "?"))
+            logger.debug("crm_writer: saved update %s", getattr(update, "update_id", "?"))
+        except Exception as e:
+            logger.error("crm_writer: failed to save update %s: %s", getattr(update, "update_id", "?"), e, exc_info=True)
 
     async def save_outgoing(
         self,
@@ -283,7 +278,7 @@ class CRMWriter:
         db_msg = Message(
             user_id=user.id,
             telegram_message_id=msg.message_id,
-            chat_id=msg.chat_id,
+            chat_id=msg.chat_id if isinstance(msg.chat_id, int) else msg.chat.id,
             direction=MessageDirection.incoming,
             message_type=msg_type,
             text=text,

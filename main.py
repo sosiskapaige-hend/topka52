@@ -330,7 +330,11 @@ async def _run_bot(app: Application) -> None:
     """Run PTB polling inside an already-running event loop."""
     await app.initialize()
     await app.start()
-    await app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+    # Drop pending updates to avoid Conflict with previous instance
+    await app.updater.start_polling(
+        allowed_updates=Update.ALL_TYPES,
+        drop_pending_updates=True,
+    )
     logger.info("Telegram bot polling started")
     # Keep running until cancelled
     try:
