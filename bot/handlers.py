@@ -254,17 +254,9 @@ async def bundle_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
             return BUNDLE_AMOUNT
             
         # Check limits
-        # Максимально пользователь может получить x3 от суммы всех своих пополнений.
-        limit = record.total_deposited * 3
-        # calculate total profit made so far
-        total_profit = sum(b.get("profit", 0) for b in record.history)
-        
-        if total_profit >= limit and limit > 0:
-            await update.message.reply_text(texts.BUNDLE_LIMIT_REACHED)
-            return BUNDLE_AMOUNT
-            
-        if limit == 0:
-            # According to prompt: "После первого пополнения фиксируется общий объём... Для продолжения работы необходимо пополнить баланс."
+        from bot.constants import PLUS_OPERATIONS_LIMIT
+        ops_limit = PLUS_OPERATIONS_LIMIT if record.subscription_active else (record.operations_limit or OPERATIONS_LIMIT)
+        if record.operations_done >= ops_limit:
             await update.message.reply_text(texts.BUNDLE_LIMIT_REACHED)
             return BUNDLE_AMOUNT
 
@@ -284,7 +276,9 @@ async def bundle_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
             "ex2": ex2,
             "amount": amount,
             "spread_str": spread_str,
-            "profit": 0  # will be updated when done
+            "profit": profit,
+            "start_time": time.time(),
+            "duration": duration,
         }
         
         # Deduct balance and add to active

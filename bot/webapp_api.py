@@ -179,6 +179,45 @@ async def xrocket_webhook_alt(request: Request, x_sig: str | None = Depends(_xro
 # ── Payment poller (startup) ──────────────────────────────────────────────────
 
 @app.on_event("startup")
+async def _restore_pending_bundles():
+    """Re-schedule finish tasks for bundles that survived a restart."""
+    import main as _main
+
+    async def _wait_and_finish():
+        # Wait for ptb_app to be ready
+        for _ in range(30):
+            if getattr(_main, "ptb_app", None):
+                break
+            await asyncio.sleep(1)
+
+        storage = _storage
+        if not storage:
+            return
+
+        from bot.handlers import _finish_bundle_task
+        now = time.time()
+        try:
+            pool = await __import__("bot.db", fromlist=["get_pool"]).get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT telegram_id, active_bundles FROM users WHERE active_bundles != '[]'")
+            for row in rows:
+                uid = row["telegram_id"]
+                bundles = row["active_bundles"] if isinstance(row["active_bundles"], list) else __import__("json").loads(row["active_bundles"])
+                for b in bundles:
+                    start = b.get("start_time", now)
+                    duration = b.get("duration", 60)
+                    remaining = max(0, int(start + duration - now))
+                    asyncio.create_task(
+                        _finish_bundle_task(_main.ptb_app, remaining, uid, b["id"], b.get("profit", 0))
+                    )
+                    logger.info("Restored bundle %s for user %s, finishes in %ds", b["id"], uid, remaining)
+        except Exception as e:
+            logger.error("Failed to restore pending bundles: %s", e)
+
+    asyncio.create_task(_wait_and_finish())
+
+
+@app.on_event("startup")
 async def _start_payment_poller():
     interval = int(os.getenv("XROCKET_POLL_INTERVAL", "60"))
     if os.getenv("ENABLE_XROCKET_POLL", "true").lower() not in ("1", "true", "yes"):
@@ -414,19 +453,22 @@ async def send_support(
     ticket_id = await tickets.create_ticket(uid, uname_str, req.message)
 
     import main
-    if hasattr(main, "ptb_app"):
-        admins = await storage.get_all_admins()
-        escaped_text = html.escape(req.message)
-        msg = (
-            f"📩 <b>Новое обращение #{ticket_id} (WebApp)</b>\n"
-            f"От: {uname_str}\n\n"
-            f"{escaped_text}\n\n"
-            f"💡 Откройте /panel для ответа"
-        )
-        for admin_id in admins:
-            asyncio.create_task(
-                main.ptb_app.bot.send_message(chat_id=admin_id, text=msg, parse_mode="HTML")
+    if hasattr(main, "ptb_app") and main.ptb_app:
+        try:
+            admins = await storage.get_all_admins()
+            escaped_text = html.escape(req.message)
+            msg = (
+                f"📩 <b>Новое обращение #{ticket_id} (WebApp)</b>\n"
+                f"От: {uname_str}\n\n"
+                f"{escaped_text}\n\n"
+                f"💡 Откройте /panel для ответа"
             )
+            for admin_id in admins:
+                asyncio.create_task(
+                    main.ptb_app.bot.send_message(chat_id=admin_id, text=msg, parse_mode="HTML")
+                )
+        except Exception as e:
+            logger.error("Failed to notify admins about ticket %s: %s", ticket_id, e)
 
     return {"status": "success", "ticket_id": ticket_id}
 

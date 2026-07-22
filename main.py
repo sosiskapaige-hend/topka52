@@ -138,7 +138,7 @@ def _start_xrocket_poller(app: Application) -> None:
                 payments: PaymentStorage | None = app.bot_data.get("payments")
                 storage: UserStorage | None = app.bot_data.get("storage")
                 if payments and storage:
-                    for rec in payments.get_pending_payments():
+                    for rec in await payments.get_pending_payments():
                         invoice_id = rec.get("invoice_id")
                         if not invoice_id:
                             continue

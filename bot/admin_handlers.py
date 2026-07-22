@@ -63,15 +63,15 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             for w in withdraws:
                 uname = w.get("username") or f"id:{w['user_id']}"
                 buttons.append([InlineKeyboardButton(
-                    f"📤 Вывод #{w['id']} • {w['amount']:.2f} USDT",
-                    callback_data=f"{CB_ADMIN_WITHDRAW_PREFIX}{w['id']}"
+                    f"📤 Вывод #{w['withdraw_id']} • {w['amount']:.2f} USDT",
+                    callback_data=f"{CB_ADMIN_WITHDRAW_PREFIX}{w['withdraw_id']}"
                 )])
             for t in tickets:
                 uname = t.get("username") or f"id:{t['user_id']}"
                 preview = t["message"][:30] + ("…" if len(t["message"]) > 30 else "")
                 buttons.append([InlineKeyboardButton(
-                    f"#{t['id']} • {uname}: {preview}",
-                    callback_data=f"{CB_ADMIN_REPLY_PREFIX}{t['id']}"
+                    f"#{t['ticket_id']} • {uname}: {preview}",
+                    callback_data=f"{CB_ADMIN_REPLY_PREFIX}{t['ticket_id']}"
                 )])
             keyboard = InlineKeyboardMarkup(buttons)
 
@@ -178,8 +178,8 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             uname = t.get("username") or f"id:{t['user_id']}"
             preview = t["message"][:30] + ("…" if len(t["message"]) > 30 else "")
             buttons.append([InlineKeyboardButton(
-                f"#{t['id']} • {uname}: {preview}",
-                callback_data=f"{CB_ADMIN_REPLY_PREFIX}{t['id']}"
+                f"#{t['ticket_id']} • {uname}: {preview}",
+                callback_data=f"{CB_ADMIN_REPLY_PREFIX}{t['ticket_id']}"
             )])
         await update.message.reply_text(panel_text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
 
@@ -351,8 +351,8 @@ async def show_withdraw_panel(update: Update, context: ContextTypes.DEFAULT_TYPE
         for w in pending:
             uname = w.get("username") or f"id:{w['user_id']}"
             buttons.append([InlineKeyboardButton(
-                f"#{w['id']} · {uname} · {w['amount']:.2f} USDT",
-                callback_data=f"{CB_ADMIN_WITHDRAW_PREFIX}{w['id']}"
+                f"#{w['withdraw_id']} · {uname} · {w['amount']:.2f} USDT",
+                callback_data=f"{CB_ADMIN_WITHDRAW_PREFIX}{w['withdraw_id']}"
             )])
         keyboard = InlineKeyboardMarkup(buttons)
 
@@ -389,7 +389,7 @@ async def admin_withdraw_view(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     uname = w.get("username") or f"id:{w['user_id']}"
     text = (
-        f"💸 <b>Заявка на вывод #{w['id']}</b>\n"
+        f"💸 <b>Заявка на вывод #{w['withdraw_id']}</b>\n"
         f"От: {html.escape(uname)}\n"
         f"Сумма: <b>{w['amount']:.4f} USDT</b>\n"
         f"Адрес: <code>{html.escape(w['address'])}</code>\n\n"
@@ -397,8 +397,8 @@ async def admin_withdraw_view(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ Одобрить", callback_data=f"{CB_ADMIN_WITHDRAW_APPROVE}{w['id']}"),
-            InlineKeyboardButton("❌ Отклонить", callback_data=f"{CB_ADMIN_WITHDRAW_REJECT}{w['id']}"),
+            InlineKeyboardButton("✅ Одобрить", callback_data=f"{CB_ADMIN_WITHDRAW_APPROVE}{w['withdraw_id']}"),
+            InlineKeyboardButton("❌ Отклонить", callback_data=f"{CB_ADMIN_WITHDRAW_REJECT}{w['withdraw_id']}"),
         ],
         [InlineKeyboardButton("« Назад", callback_data=CB_ADMIN_PANEL)],
     ])
@@ -433,7 +433,7 @@ async def admin_withdraw_approve(update: Update, context: ContextTypes.DEFAULT_T
         await context.bot.send_message(
             chat_id=w["user_id"],
             text=(
-                f"✅ <b>Заявка на вывод #{w['id']} одобрена!</b>\n\n"
+                f"✅ <b>Заявка на вывод #{w['withdraw_id']} одобрена!</b>\n\n"
                 f"Сумма: <b>{w['amount']:.4f} USDT</b>\n"
                 f"Адрес: <code>{html.escape(w['address'])}</code>\n\n"
                 f"Средства будут переведены в течение нескольких минут."
@@ -445,7 +445,7 @@ async def admin_withdraw_approve(update: Update, context: ContextTypes.DEFAULT_T
 
     await query.answer("✅ Одобрено!")
     await query.message.edit_text(
-        f"✅ Заявка <b>#{w['id']}</b> одобрена. Баланс пользователя списан.",
+        f"✅ Заявка <b>#{w['withdraw_id']}</b> одобрена. Баланс пользователя списан.",
         parse_mode="HTML",
     )
 
@@ -488,7 +488,7 @@ async def admin_withdraw_reject_reason(update: Update, context: ContextTypes.DEF
         await context.bot.send_message(
             chat_id=w["user_id"],
             text=(
-                f"❌ <b>Заявка на вывод #{w['id']} отклонена</b>\n\n"
+                f"❌ <b>Заявка на вывод #{w['withdraw_id']} отклонена</b>\n\n"
                 f"Причина: {html.escape(reason)}\n\n"
                 f"Средства остались на вашем балансе. Обратитесь в поддержку при необходимости."
             ),

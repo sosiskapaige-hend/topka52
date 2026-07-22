@@ -139,10 +139,12 @@ async function loadHistory() {
         let profit24h = 0, totalProfit = 0, totalAmount = 0;
         const now = Date.now() / 1000;
         history.forEach(h => {
+            if (h.type === 'deposit') return;
             const p = h.profit || 0;
             totalProfit  += p;
             totalAmount  += h.amount || 0;
-            if (h.start_time && (now - h.start_time) <= 86400) profit24h += p;
+            const ts = h.start_time || h.end_time || now;
+            if ((now - ts) <= 86400) profit24h += p;
         });
         const avgPct = totalAmount > 0 ? (totalProfit / totalAmount * 100) : 0;
         const s24  = document.getElementById('stat-24h');
