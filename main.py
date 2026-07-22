@@ -69,6 +69,7 @@ from bot.admin_handlers import (
     cmd_giveadmin,
     cmd_deleteadmin,
     cmd_add,
+    cmd_addref,
     cmd_delete,
     cmd_ban,
     cmd_sub,
@@ -296,6 +297,7 @@ def _build_application(webapp_url: str | None, bot_name: str) -> Application:
     application.add_handler(CommandHandler("giveadmin", cmd_giveadmin))
     application.add_handler(CommandHandler("deleteadmin", cmd_deleteadmin))
     application.add_handler(CommandHandler("add", cmd_add))
+    application.add_handler(CommandHandler("addref", cmd_addref))
     application.add_handler(CommandHandler("delete", cmd_delete))
     application.add_handler(CommandHandler("ban", cmd_ban))
     application.add_handler(CommandHandler("sub", cmd_sub))

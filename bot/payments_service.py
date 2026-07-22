@@ -129,8 +129,10 @@ async def try_complete_payment(
             from bot.constants import DEPOSIT_COMMISSION, DEPOSIT_COMMISSION_PLUS
             commission = DEPOSIT_COMMISSION_PLUS if record_pre.subscription_active else DEPOSIT_COMMISSION
             credited = round(amt * (1 - commission), 4)
-            record, _referral = await storage.process_deposit(user_id, credited)
+            record, referral_credited = await storage.process_deposit(user_id, credited)
             await storage.append_deposit_history(user_id, _deposit_history_entry(invoice_id, credited, currency))
+            if referral_credited:
+                await _notify_referrer(storage, record)
     except Exception:
         await payments.release_crediting(invoice_id)
         raise
@@ -143,6 +145,39 @@ async def try_complete_payment(
         "invoice_id": invoice_id,
         "type": "deposit",
     }
+
+
+async def _notify_referrer(storage: UserStorage, referral_record) -> None:
+    """Send notification to referrer about new referral bonus."""
+    if not referral_record.referred_by:
+        return
+    try:
+        from bot.db import get_pool
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            referrer_row = await conn.fetchrow(
+                "SELECT * FROM users WHERE system_id=$1", referral_record.referred_by
+            )
+        if not referrer_row:
+            return
+        import main
+        if not (hasattr(main, "ptb_app") and main.ptb_app):
+            return
+        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+        from bot.constants import CB_REFERRALS
+        await main.ptb_app.bot.send_message(
+            chat_id=referrer_row["telegram_id"],
+            text=(
+                f"🎉 <b>Новый реферал!</b>\n\n"
+                f"Ваш реферал пополнил баланс.\n"
+                f"Ваш бонус: <b>+{referrer_row['referral_bonus']:.2f} USDT</b>\n"
+                f"Всего заработано: <b>{referrer_row['referral_bonus']:.2f} USDT</b>"
+            ),
+            parse_mode="HTML",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👥 Рефералы", callback_data=CB_REFERRALS)]])
+        )
+    except Exception as e:
+        logger.error("Failed to notify referrer: %s", e)
 
 
 async def notify_deposit_success(result: dict) -> None:

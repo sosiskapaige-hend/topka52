@@ -250,8 +250,32 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     storage = _storage(context)
     await storage.get_or_create(target_id)
-    await storage.process_deposit(target_id, amount)
+    record, referral_credited = await storage.process_deposit(target_id, amount)
+    if referral_credited:
+        from bot.payments_service import _notify_referrer
+        await _notify_referrer(storage, record)
     await update.message.reply_text(f"✅ Баланс пользователя {target_id} пополнен на {amount:.2f} USDT (учтено как депозит).")
+
+
+async def cmd_addref(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Manually credit referral: /addref REFERRAL_ID REFERRER_SYSTEM_ID"""
+    if not await _is_admin(update, context):
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("Использование: /addref REFERRAL_ID REFERRER_SYSTEM_ID")
+        return
+    try:
+        referral_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("Неверный ID реферала.")
+        return
+    referrer_sid = context.args[1].strip()
+    storage = _storage(context)
+    ok = await storage.force_credit_referral(referral_id, referrer_sid)
+    if ok:
+        await update.message.reply_text(f"✅ Реферальный бонус начислен. Реферал {referral_id} засчитан.")
+    else:
+        await update.message.reply_text("❌ Не удалось начислить: реферал уже засчитан, не найден или referrer_system_id неверный.")
 
 
 async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

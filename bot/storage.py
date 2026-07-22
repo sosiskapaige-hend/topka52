@@ -122,7 +122,26 @@ class UserStorage:
             )
             return True
 
-    async def credit_referral(self, new_telegram_id: int) -> bool:
+    async def force_credit_referral(self, new_telegram_id: int, referrer_system_id: str) -> bool:
+        """Admin-triggered: set pending_referrer and immediately credit bonus."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            user = await conn.fetchrow("SELECT * FROM users WHERE telegram_id=$1", new_telegram_id)
+            if not user or user["referral_qualified"]:
+                return False
+            referrer = await conn.fetchrow(
+                "SELECT * FROM users WHERE system_id=$1 AND telegram_id!=$2",
+                referrer_system_id, new_telegram_id,
+            )
+            if not referrer:
+                return False
+            await conn.execute(
+                "UPDATE users SET pending_referrer=$1 WHERE telegram_id=$2",
+                referrer_system_id, new_telegram_id,
+            )
+        return await self.credit_referral(new_telegram_id)
+
+    async def credit_referral(self, new_telegram_id: int, deposit_amount: float | None = None) -> bool:
         from bot.constants import REFERRAL_COMMISSION
         pool = await get_pool()
         async with pool.acquire() as conn:
@@ -135,7 +154,7 @@ class UserStorage:
                 )
                 if not referrer:
                     return False
-                bonus = round(user["total_deposited"] * REFERRAL_COMMISSION, 4)
+                bonus = round((deposit_amount if deposit_amount is not None else user["total_deposited"]) * REFERRAL_COMMISSION, 4)
                 await conn.execute(
                     """UPDATE users SET referral_count=referral_count+1,
                        referral_bonus=referral_bonus+$1, balance=balance+$1
@@ -264,8 +283,8 @@ class UserStorage:
             )
             record = _row_to_user(row)
         qualified = False
-        if not record.referral_qualified and record.total_deposited >= 10.0:
-            qualified = await self.credit_referral(telegram_id)
+        if not record.referral_qualified and record.pending_referrer:
+            qualified = await self.credit_referral(telegram_id, deposit_amount=amount)
         return record, qualified
 
     async def append_deposit_history(self, telegram_id: int, entry: dict) -> None:
