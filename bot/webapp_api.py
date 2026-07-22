@@ -24,7 +24,6 @@ _tickets: TicketStorage | None = None
 _withdrawals: WithdrawStorage | None = None
 _payments = None
 
-
 def get_storage() -> UserStorage:
     if not _storage:
         raise HTTPException(status_code=500, detail="Storage not initialized")
@@ -44,7 +43,6 @@ def get_payments():
     if not _payments:
         raise HTTPException(status_code=500, detail="Payments not initialized")
     return _payments
-
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -77,7 +75,6 @@ def get_current_user(x_tg_init_data: str = Header(..., alias="X-TG-INIT-DATA")):
         raise HTTPException(status_code=401, detail="User data missing")
     return user_info
 
-
 # ── Rate limiting ─────────────────────────────────────────────────────────────
 
 _rate_store: dict[str, list[float]] = defaultdict(list)
@@ -96,13 +93,11 @@ def _rate_limit(request: Request, limit: int = 60, window: int = 60):
     if not _check_rate(f"ip:{ip}", limit, window):
         raise HTTPException(status_code=429, detail="Too many requests")
 
-
 def _get_ptb_app():
     """Read ptb_app from __main__ module to avoid stale import reference."""
     import sys
     main_mod = sys.modules.get("__main__") or sys.modules.get("main")
     return getattr(main_mod, "ptb_app", None) if main_mod else None
-
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
@@ -117,11 +112,9 @@ app.add_middleware(
 
 app.mount("/app", StaticFiles(directory="webapp", html=True), name="webapp")
 
-
 @app.get("/health")
 async def health() -> dict:
     return {"ok": True}
-
 
 # ── Xrocket webhook ───────────────────────────────────────────────────────────
 
@@ -130,7 +123,6 @@ def _xrocket_signature(
     legacy_signature: str | None = Header(None, alias="X-XROCKET-SIGNATURE"),
 ) -> str | None:
     return rocket_pay_signature or legacy_signature
-
 
 async def _process_xrocket_payload(payload: dict, raw_body: bytes, x_sig: str | None) -> dict:
     try:
@@ -162,7 +154,6 @@ async def _process_xrocket_payload(payload: dict, raw_body: bytes, x_sig: str | 
         schedule_deposit_notification(result)
     return {"ok": True, "processed": bool(result), "invoice_id": invoice_id}
 
-
 @app.post("/api/xrocket/webhook")
 async def xrocket_webhook(request: Request, x_sig: str | None = Depends(_xrocket_signature)):
     body = await request.body()
@@ -171,7 +162,6 @@ async def xrocket_webhook(request: Request, x_sig: str | None = Depends(_xrocket
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
     return JSONResponse(await _process_xrocket_payload(payload, body, x_sig))
-
 
 @app.post("/xrocket/webhook")
 async def xrocket_webhook_alt(request: Request, x_sig: str | None = Depends(_xrocket_signature)):
@@ -182,17 +172,14 @@ async def xrocket_webhook_alt(request: Request, x_sig: str | None = Depends(_xro
         raise HTTPException(status_code=400, detail="Invalid JSON")
     return JSONResponse(await _process_xrocket_payload(payload, body, x_sig))
 
-
 # ── Payment poller (startup) ──────────────────────────────────────────────────
 
 from contextlib import asynccontextmanager
-
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     asyncio.create_task(_bundle_completer_loop())
     yield
-
 
 async def _bundle_completer_loop():
         import json as _json
@@ -265,11 +252,7 @@ async def _bundle_completer_loop():
                 logger.error("Bundle completer error: %s", e, exc_info=True)
             await asyncio.sleep(30)
 
-    asyncio.create_task(_loop())
-
-
 # Payment poller runs in main.py only — removed duplicate here
-
 
 # ── API endpoints ─────────────────────────────────────────────────────────────
 
@@ -304,7 +287,6 @@ async def get_me(
         "deposit_commission": commission,
         "withdraw_commission": WITHDRAW_COMMISSION,
     }
-
 
 @app.get("/api/bundles")
 async def get_bundles(
@@ -344,11 +326,9 @@ async def get_bundles(
         "active_bundles": active,
     }
 
-
 class LaunchRequest(BaseModel):
     coin: str
     amount: float
-
 
 @app.post("/api/bundles/launch")
 async def launch_bundle(
@@ -401,7 +381,6 @@ async def launch_bundle(
 
     return {"status": "success"}
 
-
 @app.get("/api/transactions")
 async def get_history(
     request: Request,
@@ -412,7 +391,6 @@ async def get_history(
     uid = user["id"]
     record = await storage.get_or_create(uid)
     return {"history": record.history}
-
 
 @app.get("/api/referrals")
 async def get_referrals(
@@ -429,10 +407,8 @@ async def get_referrals(
         "link": await storage.get_referral_link(uid),
     }
 
-
 class SupportRequest(BaseModel):
     message: str
-
 
 @app.post("/api/support")
 async def send_support(
@@ -484,15 +460,12 @@ async def send_support(
 
     return {"status": "success", "ticket_id": ticket_id}
 
-
 class WithdrawRequest(BaseModel):
     amount: float
     address: str
 
-
 class DepositRequest(BaseModel):
     amount: float
-
 
 @app.post("/api/deposit/create")
 async def create_deposit(
@@ -555,7 +528,6 @@ async def create_deposit(
         logger.error("Failed to create deposit invoice: %s", e)
         raise HTTPException(status_code=500, detail="Не удалось создать счёт")
 
-
 @app.post("/api/plus/buy")
 async def buy_plus(
     request: Request,
@@ -605,7 +577,6 @@ async def buy_plus(
     except Exception as e:
         logger.error("Failed to create plus invoice: %s", e)
         raise HTTPException(status_code=500, detail="Не удалось создать счёт")
-
 
 @app.post("/api/withdraw")
 async def request_withdraw(
@@ -674,3 +645,4 @@ async def request_withdraw(
             )
 
     return {"status": "success", "withdraw_id": withdraw_id, "net_amount": net_amount}
+
