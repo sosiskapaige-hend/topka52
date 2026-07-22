@@ -248,7 +248,10 @@ class CRMWriter:
     async def _handle_message(self, session: AsyncSession, msg, is_edit: bool) -> None:
         tg_user = msg.from_user
         if not tg_user:
+            logger.warning("crm_writer: message has no from_user (chat_id=%s, msg_id=%s)", getattr(msg, 'chat_id', '?'), getattr(msg, 'message_id', '?'))
             return
+
+        logger.info("crm_writer: saving message from user %s (edit=%s)", tg_user.id, is_edit)
 
         user = await self._upsert_user(session, tg_user)
 

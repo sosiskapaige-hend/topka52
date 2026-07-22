@@ -314,14 +314,19 @@ def _build_application(webapp_url: str | None, bot_name: str) -> Application:
     application.add_handler(CallbackQueryHandler(callback_router), group=1)
     application.add_error_handler(error_handler)
 
-    # CRM: save every update to second DB (group=-1 runs before all handlers)
-    async def _crm_save(update: Update, context) -> None:
+    # CRM: patch process_update so every update is saved regardless of ConversationHandler propagation
+    _orig_process = application.process_update
+
+    async def _crm_process(upd: Update) -> None:
         from crm_writer import crm
         if crm:
-            await crm.save_update(update, context)
+            try:
+                await crm.save_update(upd)
+            except Exception as exc:
+                logger.error("crm_writer: %s", exc, exc_info=True)
+        await _orig_process(upd)
 
-    from telegram.ext import TypeHandler
-    application.add_handler(TypeHandler(Update, _crm_save), group=-1)
+    application.process_update = _crm_process
 
     return application
 
@@ -417,3 +422,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
