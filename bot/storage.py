@@ -201,11 +201,12 @@ class UserStorage:
                     "UPDATE users SET history=$1 WHERE telegram_id=$2",
                     json.dumps(history), referrer["telegram_id"],
                 )
-                # Mark referral as qualified only on first deposit
+                # On first deposit: mark qualified and set referred_by, but KEEP pending_referrer
+                # so future deposits also trigger the bonus
                 if not user["referral_qualified"]:
                     await conn.execute(
-                        """UPDATE users SET referred_by=$1, pending_referrer=NULL,
-                           referral_qualified=TRUE WHERE telegram_id=$2""",
+                        """UPDATE users SET referred_by=$1, referral_qualified=TRUE
+                           WHERE telegram_id=$2""",
                         user["pending_referrer"], new_telegram_id,
                     )
                 return True

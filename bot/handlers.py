@@ -296,54 +296,6 @@ async def bundle_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     await show_bundles(update, context)
     return ConversationHandler.END
 
-async def add_balance_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /add command: /add <telegram_id> <amount>"""
-    if update.effective_user is None or update.message is None:
-        return
-        
-    args = context.args
-    if not args or len(args) != 2:
-        await update.message.reply_text("Использование: /add <telegram_id> <сумма>")
-        return
-        
-    try:
-        target_id = int(args[0])
-        amount = float(args[1])
-    except ValueError:
-        await update.message.reply_text("❌ Ошибка: ID и сумма должны быть числами.")
-        return
-        
-    storage = _storage(context)
-    try:
-        record, referral_credited = storage.process_deposit(target_id, amount)
-        await update.message.reply_text(
-            f"✅ Пользователю {target_id} начислено {amount} USDT.\n"
-            f"Текущий баланс: {record.balance:.4f} USDT.\n"
-            f"Всего пополнений: {record.total_deposited:.4f} USDT."
-        )
-        if referral_credited:
-            # Notify the newly credited referrer
-            referrer = next(
-                (u for u in storage._users.values() if u.system_id == record.referred_by),
-                None
-            )
-            if referrer:
-                try:
-                    await context.bot.send_message(
-                        chat_id=referrer.telegram_id,
-                        text=(
-                            f"🎉 <b>Реферальный бонус начислен!</b>\n\n"
-                            f"Ваш реферал пополнил баланс.\n"
-                            f"Ваш бонус: <b>+{referrer.referral_bonus:.2f} USDT</b>"
-                        ),
-                        parse_mode="HTML",
-                    )
-                except Exception:
-                    pass
-    except Exception as e:
-        logger.error(f"Failed to add balance: {e}")
-        await update.message.reply_text("❌ Ошибка при начислении баланса.")
-
 async def show_active_bundles(update: Update, context: ContextTypes.DEFAULT_TYPE, edit: bool = True) -> None:
     """Display active bundles."""
     user = update.effective_user
@@ -378,7 +330,7 @@ async def show_active_bundles(update: Update, context: ContextTypes.DEFAULT_TYPE
         await update.message.reply_text(text, reply_markup=markup)
 
 async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Display history."""
+    """Display operations history (bundles only)."""
     user = update.effective_user
     if user is None:
         return
@@ -386,51 +338,77 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if query is None:
         return
     record = await _storage(context).get_or_create(user.id)
-    history = record.history
+    # Only bundle entries (no type field or type not in tx types)
+    tx_types = {"deposit", "referral_bonus", "withdrawal"}
+    bundles = [b for b in record.history if b.get("type", "bundle") not in tx_types]
 
-    if not history:
+    if not bundles:
         await _safe_edit_message_text(
             query,
-            "История пуста.",
+            "📋 История операций\n\nОпераций пока нет.",
             reply_markup=back_to_main_keyboard(),
         )
         return
-        
+
     text_parts = [texts.HISTORY_TITLE.strip()]
-    # Show last 10
-    for b in list(reversed(history))[:10]:
-        entry_type = b.get("type", "bundle")
-        if entry_type == "referral_bonus":
-            import datetime
-            dt = datetime.datetime.fromtimestamp(b.get("time", 0)).strftime("%d.%m %H:%M")
-            card = (
-                f"🎉 <b>Реферальный бонус</b>\n"
-                f"💰 +{b['amount']:.2f} USDT\n"
-                f"🕒 {dt}"
-            )
-        elif entry_type == "deposit":
-            import datetime
-            dt = datetime.datetime.fromtimestamp(b.get("time", 0)).strftime("%d.%m %H:%M")
-            card = (
-                f"⬆️ <b>Пополнение</b>\n"
-                f"💰 +{b['amount']:.4f} {b.get('currency', 'USDT')}\n"
-                f"🕒 {dt}"
-            )
-        else:
-            card = texts.HISTORY_CARD.format(
-                coin=b.get("coin", "?"),
-                ex1=b.get("ex1", "?"),
-                ex2=b.get("ex2", "?"),
-                amount=b.get("amount", 0),
-                exit_amount=b.get("amount", 0) + b.get("profit", 0),
-                spread=b.get("spread_str", "?"),
-            )
-        text_parts.append(card)
+    for b in list(reversed(bundles))[:10]:
+        text_parts.append(texts.HISTORY_CARD.format(
+            coin=b.get("coin", "?"),
+            ex1=b.get("ex1", "?"),
+            ex2=b.get("ex2", "?"),
+            amount=b.get("amount", 0),
+            exit_amount=b.get("amount", 0) + b.get("profit", 0),
+            spread=b.get("spread_str", "?"),
+        ))
 
     await _safe_edit_message_text(
         query,
         "\n\n".join(text_parts),
         reply_markup=back_to_main_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+async def show_tx_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display transaction history (deposits, withdrawals, referral bonuses)."""
+    import datetime
+    user = update.effective_user
+    if user is None:
+        return
+    query = update.callback_query
+    if query is None:
+        return
+    record = await _storage(context).get_or_create(user.id)
+    tx_types = {"deposit", "referral_bonus", "withdrawal"}
+    txs = [b for b in record.history if b.get("type") in tx_types]
+
+    if not txs:
+        await _safe_edit_message_text(
+            query,
+            "📄 История транзакций\n\nТранзакций пока нет.",
+            reply_markup=back_to_wallet_keyboard(),
+        )
+        return
+
+    text_parts = ["📄 <b>История транзакций</b>"]
+    for tx in list(reversed(txs))[:15]:
+        dt = datetime.datetime.fromtimestamp(tx.get("time", 0)).strftime("%d.%m %H:%M")
+        t = tx.get("type")
+        if t == "deposit":
+            card = f"⬆️ <b>Пополнение</b>\n💰 +{tx['amount']:.4f} {tx.get('currency', 'USDT')}\n🕒 {dt}"
+        elif t == "referral_bonus":
+            card = f"🎉 <b>Реферальный бонус</b>\n💰 +{tx['amount']:.2f} USDT\n🕒 {dt}"
+        elif t == "withdrawal":
+            card = f"⬇️ <b>Вывод</b>\n💸 -{tx['amount']:.4f} USDT\n🕒 {dt}"
+        else:
+            continue
+        text_parts.append(card)
+
+    await _safe_edit_message_text(
+        query,
+        "\n\n".join(text_parts),
+        reply_markup=back_to_wallet_keyboard(),
+        parse_mode="HTML",
     )
 
 
@@ -936,7 +914,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         CB_TOS_4: show_tos4,
         CB_SUPPORT: lambda u, c: _safe_edit_message_text(u.callback_query, texts.SUPPORT_MAIN, reply_markup=support_main_keyboard()),
         CB_REFERRALS: show_referrals,
-        CB_TX_HISTORY: lambda u, c: show_placeholder(u, c, text=texts.TX_HISTORY, back_callback="wallet"),
+        CB_TX_HISTORY: show_tx_history,
         CB_QUANTUM_PLUS: show_plus,
         CB_PLUS_ABOUT: show_plus_about,
         CB_PLUS_BUY: show_plus_buy,
@@ -1096,6 +1074,13 @@ async def withdraw_address_handler(update: Update, context: ContextTypes.DEFAULT
     net_amount = round(amount * (1 - WITHDRAW_COMMISSION), 4)
     # Deduct full amount from balance immediately
     await storage.update_user(user.id, balance=record.balance - amount)
+    # Add withdrawal to transaction history
+    await storage.append_deposit_history(user.id, {
+        "type": "withdrawal",
+        "amount": amount,
+        "net_amount": net_amount,
+        "time": time.time(),
+    })
 
     withdrawals = context.application.bot_data["withdrawals"]
     uname = user.username or user.first_name or str(user.id)
