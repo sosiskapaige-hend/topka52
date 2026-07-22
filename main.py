@@ -314,6 +314,15 @@ def _build_application(webapp_url: str | None, bot_name: str) -> Application:
     application.add_handler(CallbackQueryHandler(callback_router), group=1)
     application.add_error_handler(error_handler)
 
+    # CRM: save every update to second DB (group=-1 runs before all handlers)
+    async def _crm_save(update: Update, context) -> None:
+        from crm_writer import crm
+        if crm:
+            await crm.save_update(update, context)
+
+    from telegram.ext import TypeHandler
+    application.add_handler(TypeHandler(Update, _crm_save), group=-1)
+
     return application
 
 
@@ -359,6 +368,15 @@ async def _main_async() -> None:
     from bot.db import init_pool, close_pool
     await init_pool()
     logger.info("PostgreSQL pool initialized")
+
+    # Initialize CRM (second DB)
+    two_bd_url = os.getenv("TWO_BD")
+    if two_bd_url:
+        from crm_writer import init_crm
+        init_crm(two_bd_url)
+        logger.info("CRM writer initialized")
+    else:
+        logger.warning("TWO_BD not set — CRM logging disabled")
 
     # Build PTB app
     application = _build_application(webapp_url, bot_name)
