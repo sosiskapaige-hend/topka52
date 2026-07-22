@@ -324,11 +324,6 @@ async def launch_bundle(
     if record.operations_done >= ops_limit:
         raise HTTPException(status_code=400, detail="Достигнут лимит операций")
 
-    limit = record.total_deposited * 3
-    total_profit = sum(b.get("profit", 0) for b in record.history)
-    if limit == 0 or (total_profit >= limit and limit > 0):
-        raise HTTPException(status_code=400, detail="Достигнут лимит прибыли. Пополните баланс.")
-
     profit = round(req.amount * random.uniform(p_min, p_max) / 100.0, 6)
     duration = random.randint(t_min, t_max)
     bundle_id = str(uuid.uuid4())
