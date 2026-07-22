@@ -171,11 +171,14 @@ class Attachment(Base):
 
 class CRMWriter:
     def __init__(self, database_url: str):
-        """
-        database_url: asyncpg connection string, e.g.
-            postgresql+asyncpg://user:pass@host/db?ssl=require
-        """
-        self._engine = create_async_engine(database_url, pool_size=3, max_overflow=5)
+        # asyncpg doesn't accept sslmode/ssl as query params — strip and pass via connect_args
+        import re
+        ssl_required = bool(re.search(r"ssl(mode)?=", database_url))
+        clean_url = re.sub(r"[?&]ssl(mode)?=[^&]*", "", database_url).rstrip("?&")
+        connect_args = {"ssl": "require"} if ssl_required else {}
+        self._engine = create_async_engine(
+            clean_url, pool_size=3, max_overflow=5, connect_args=connect_args
+        )
         self._session_factory = async_sessionmaker(self._engine, expire_on_commit=False)
 
     async def close(self):
