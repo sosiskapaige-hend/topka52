@@ -78,7 +78,7 @@ def _row_to_user(row) -> UserRecord:
 
 class UserStorage:
     def __init__(self, bot_name: str | None = None) -> None:
-        self._bot_name = bot_name or "quantumcryptobot"
+        self._bot_name = bot_name or "QuantumARBcrypto_bot"
 
     async def get_or_create(self, telegram_id: int) -> UserRecord:
         pool = await get_pool()

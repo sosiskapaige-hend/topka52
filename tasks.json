@@ -1,0 +1,11 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Deploy",
+            "type": "shell",
+            "command": "$msg = -join ((65..90) + (97..122) | Get-Random -Count 12 | ForEach-Object {[char]$_}); git add .; git commit -m $msg; git push",
+            "problemMatcher": []
+        }
+    ]
+}

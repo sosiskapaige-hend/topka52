@@ -349,7 +349,7 @@ async def _main_async() -> None:
         sys.exit(1)
 
     webapp_url = os.getenv("WEBAPP_URL", "https://topka52.onrender.com/app/index.html")
-    bot_name = os.getenv("BOT_NAME", "quantumcryptobot")
+    bot_name = os.getenv("BOT_NAME", "QuantumARBcrypto_bot")
     port = int(os.getenv("PORT", "8000"))
 
     if webapp_url and not webapp_url.startswith("https://"):
