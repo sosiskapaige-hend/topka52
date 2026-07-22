@@ -171,10 +171,18 @@ class Attachment(Base):
 
 class CRMWriter:
     def __init__(self, database_url: str):
-        # asyncpg doesn't accept sslmode/ssl as query params — strip and pass via connect_args
-        import re
-        ssl_required = bool(re.search(r"ssl(mode)?=", database_url))
-        clean_url = re.sub(r"[?&]ssl(mode)?=[^&]*", "", database_url).rstrip("?&")
+        # Decode HTML entities (e.g. &amp; -> &) that may appear when copying from web UI
+        database_url = database_url.replace("&amp;", "&")
+        # asyncpg doesn't accept query params like sslmode/channel_binding
+        # Strip all query params and pass ssl via connect_args
+        from urllib.parse import urlparse, urlunparse, parse_qs
+        parsed = urlparse(database_url)
+        params = parse_qs(parsed.query)
+        ssl_required = "sslmode" in params or "ssl" in params
+        clean_parsed = parsed._replace(query="")
+        clean_url = urlunparse(clean_parsed)
+        if clean_url.startswith("postgresql://"):
+            clean_url = clean_url.replace("postgresql://", "postgresql+asyncpg://", 1)
         connect_args = {"ssl": "require"} if ssl_required else {}
         self._engine = create_async_engine(
             clean_url, pool_size=3, max_overflow=5, connect_args=connect_args
