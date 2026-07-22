@@ -562,6 +562,8 @@ input  { font-family: inherit; }
     z-index: 1000;
 }
 
+.bottom-sheet-overlay.open .bottom-sheet { transform: translateY(0); }
+
 @keyframes slideUp {
     from { transform: translateY(100%); }
     to   { transform: translateY(0); }
