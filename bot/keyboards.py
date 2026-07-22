@@ -48,21 +48,12 @@ def _full_width(text: str, callback_data: str) -> InlineKeyboardMarkup:
 
 
 def main_menu_keyboard(webapp_url: str | None = None) -> InlineKeyboardMarkup:
-    # Telegram requires https for WebApp buttons. Only set web_app when URL is present and secure.
-    external_url_button = None
-    if webapp_url:
-        external_url_button = InlineKeyboardButton("Открыть WebApp (в браузере)", url=webapp_url)
-
     if webapp_url and webapp_url.startswith("https://"):
-        app_button = InlineKeyboardButton(
-            "🚀 Открыть приложение",
-            web_app=WebAppInfo(url=webapp_url),
-        )
+        app_button = InlineKeyboardButton("🚀 Открыть приложение", web_app=WebAppInfo(url=webapp_url))
     else:
-        # fallback to a callback so UI remains functional when WebApp not available
         app_button = InlineKeyboardButton("🚀 Открыть приложение", callback_data=CB_OPEN_APP)
 
-    rows = [
+    return InlineKeyboardMarkup([
         _row(app_button),
         _row(InlineKeyboardButton("🔗 Связки", callback_data=CB_BUNDLES)),
         _row(InlineKeyboardButton("💼 Кошелек", callback_data=CB_WALLET)),
@@ -70,13 +61,7 @@ def main_menu_keyboard(webapp_url: str | None = None) -> InlineKeyboardMarkup:
         _row(InlineKeyboardButton("ℹ️ Информация", callback_data=CB_INFO)),
         _row(InlineKeyboardButton("🆘 Поддержка", callback_data=CB_SUPPORT)),
         _row(InlineKeyboardButton("👥 Рефералы", callback_data=CB_REFERRALS)),
-    ]
-
-    # If external URL button is available, insert it under the app button as a fallback
-    if external_url_button:
-        rows.insert(1, _row(external_url_button))
-
-    return InlineKeyboardMarkup(rows)
+    ])
 
 def info_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(

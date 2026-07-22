@@ -1,8 +1,8 @@
 /**
- * Quantum WebApp — Main Application Script
+ * Quantum WebApp
  */
 
-/* ── Telegram WebApp Init ────────────────────────────────────────── */
+/* ── Telegram WebApp Init ─────────────────────────────────────────── */
 const tg = window.Telegram?.WebApp;
 if (tg) {
     tg.ready();
@@ -13,51 +13,45 @@ if (tg) {
 
 const initData = tg?.initData || '';
 
-/* ── State ───────────────────────────────────────────────────────── */
-let state = {
+/* ── State ────────────────────────────────────────────────────────── */
+const state = {
     me: null,
     bundles: null,
-    referrals: null,
-    selectedCoin: null,
     balance: 0,
 };
 
-/* ── API Helper ─────────────────────────────────────────────────── */
+/* ── API ──────────────────────────────────────────────────────────── */
 async function api(method, path, body = null) {
     const opts = {
         method,
-        headers: {
-            'Content-Type': 'application/json',
-            'X-TG-INIT-DATA': initData,
-        }
+        headers: { 'Content-Type': 'application/json', 'X-TG-INIT-DATA': initData },
     };
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(path, opts);
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || 'Ошибка сервера');
     return data;
 }
+const get  = path       => api('GET',  path);
+const post = (path, b)  => api('POST', path, b);
 
-const get  = (path)       => api('GET',  path);
-const post = (path, body) => api('POST', path, body);
-
-/* ── Toast ───────────────────────────────────────────────────────── */
-let toastTimer = null;
+/* ── Toast ────────────────────────────────────────────────────────── */
+let _toastTimer = null;
 function showToast(msg, isError = false) {
     const t = document.getElementById('toast');
     t.textContent = msg;
-    isError ? t.classList.add('toast-error') : t.classList.remove('toast-error');
+    t.classList.toggle('toast-error', isError);
     t.classList.add('show');
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
-    if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred(isError ? 'error' : 'success');
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => t.classList.remove('show'), 2500);
+    tg?.HapticFeedback?.notificationOccurred(isError ? 'error' : 'success');
 }
 
 function copyText(text, label = 'Скопировано') {
     navigator.clipboard.writeText(text).then(() => showToast(label));
 }
 
-/* ── Tab Navigation ─────────────────────────────────────────────── */
+/* ── Tab Navigation ───────────────────────────────────────────────── */
 let currentTab = 'wallet';
 
 function switchTab(tab) {
@@ -65,15 +59,15 @@ function switchTab(tab) {
     currentTab = tab;
     document.querySelectorAll('.tab-content').forEach(s => s.classList.remove('active'));
     document.querySelectorAll('.tab-item').forEach(n => n.classList.remove('active'));
-    document.getElementById(`tab-${tab}`).classList.add('active');
-    document.getElementById(`nav-${tab}`).classList.add('active');
+    document.getElementById(`tab-${tab}`)?.classList.add('active');
+    document.getElementById(`nav-${tab}`)?.classList.add('active');
     if (tab === 'wallet')  loadWallet();
     if (tab === 'bundles') loadBundles();
     if (tab === 'more')    loadMore();
-    if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+    tg?.HapticFeedback?.selectionChanged();
 }
 
-/* ── Screen Navigation ───────────────────────────────────────────── */
+/* ── Screen Navigation ────────────────────────────────────────────── */
 let currentScreen = null;
 
 function openScreen(id) {
@@ -96,22 +90,24 @@ function closeScreen(andBackBtn = true) {
     if (andBackBtn && tg?.BackButton) tg.BackButton.hide();
 }
 
-/* ── Bottom Sheet ───────────────────────────────────────────────── */
-function openBottomSheet() { document.getElementById('bottom-sheet').classList.add('open'); }
+/* ── Bottom Sheet ─────────────────────────────────────────────────── */
+function openBottomSheet()  { document.getElementById('bottom-sheet').classList.add('open'); }
 function closeBottomSheet(e) {
     if (e && e.target !== document.getElementById('bottom-sheet')) return;
     document.getElementById('bottom-sheet').classList.remove('open');
     state.selectedCoin = null;
 }
 
-/* ── Wallet Tab ─────────────────────────────────────────────────── */
+/* ── Wallet Tab ───────────────────────────────────────────────────── */
 async function loadWallet() {
     try {
         const me = await get('/api/me');
         state.me = me;
         state.balance = me.balance;
         updateWalletUI(me);
-    } catch (e) { console.error(e); }
+    } catch (e) {
+        console.error('loadWallet:', e);
+    }
 }
 
 function updateWalletUI(me) {
@@ -119,13 +115,11 @@ function updateWalletUI(me) {
     document.getElementById('wallet-balance').textContent = bal;
     document.getElementById('header-balance-value').textContent = `БАЛАНС ${bal} USDT`;
 
-    const plusBadge = document.getElementById('plus-badge');
-    plusBadge.style.display = me.subscription_active ? 'block' : 'none';
+    document.getElementById('plus-badge').style.display = me.subscription_active ? 'block' : 'none';
 
     const limit = me.operations_limit || (me.subscription_active ? 300 : 100);
     document.getElementById('wallet-limit').textContent = `${me.operations_done || 0}/${limit}`;
 
-    // Show commission info
     const depPct = Math.round((me.deposit_commission || 0.07) * 100);
     const wdPct  = Math.round((me.withdraw_commission || 0.08) * 100);
     const commEl = document.getElementById('wallet-commission-info');
@@ -140,19 +134,18 @@ function updateWalletUI(me) {
 
 async function loadHistory() {
     try {
-        const data = await get('/api/transactions');
-        const history = data.history || [];
+        const { history = [] } = await get('/api/transactions');
         renderHistory(history);
         let profit24h = 0, totalProfit = 0, totalAmount = 0;
         const now = Date.now() / 1000;
         history.forEach(h => {
             const p = h.profit || 0;
-            totalProfit += p;
-            totalAmount += h.amount || 0;
+            totalProfit  += p;
+            totalAmount  += h.amount || 0;
             if (h.start_time && (now - h.start_time) <= 86400) profit24h += p;
         });
         const avgPct = totalAmount > 0 ? (totalProfit / totalAmount * 100) : 0;
-        const s24 = document.getElementById('stat-24h');
+        const s24  = document.getElementById('stat-24h');
         const sAvg = document.getElementById('stat-avg');
         if (s24)  s24.textContent  = `${profit24h.toFixed(2)} USDT`;
         if (sAvg) sAvg.textContent = `${avgPct.toFixed(1)}%`;
@@ -161,22 +154,25 @@ async function loadHistory() {
 
 function renderHistory(history) {
     const list = document.getElementById('history-list');
-    if (!history.length) { list.innerHTML = '<div class="empty-state">Нет операций</div>'; return; }
+    if (!history.length) {
+        list.innerHTML = '<div class="empty-state">Нет операций</div>';
+        return;
+    }
     list.innerHTML = history.slice(-20).reverse().map(h => {
         const profit = (h.profit || 0).toFixed(4);
         const date   = h.start_time ? new Date(h.start_time * 1000).toLocaleDateString('ru') : '—';
         const label  = h.type === 'deposit' ? '💳 Пополнение' : (h.coin || '—');
+        const amount = h.type === 'deposit' ? `+${(h.amount || 0).toFixed(4)}` : `+${profit}`;
         return `<div class="history-item">
             <div><div class="hi-coin">${label}</div><div class="hi-date">${date}</div></div>
-            <div class="hi-profit">${h.type === 'deposit' ? '+' + (h.amount||0).toFixed(4) : '+' + profit} USDT</div>
+            <div class="hi-profit">${amount} USDT</div>
         </div>`;
     }).join('');
 }
 
-/* ── Deposit ─────────────────────────────────────────────────────── */
+/* ── Deposit ──────────────────────────────────────────────────────── */
 function showDeposit() {
     openScreen('screen-deposit');
-    // Update commission label from state
     const me = state.me;
     const comm = me?.deposit_commission || 0.07;
     const pct = Math.round(comm * 100);
@@ -188,8 +184,7 @@ function showDeposit() {
 }
 
 async function submitDeposit() {
-    const amountStr = document.getElementById('deposit-input-amount').value.trim();
-    const amount = parseFloat(amountStr);
+    const amount = parseFloat(document.getElementById('deposit-input-amount').value.trim());
     if (!amount || amount < 1) { showToast('Минимальная сумма: 1 USDT', true); return; }
 
     const btn = document.getElementById('deposit-submit-btn');
@@ -198,14 +193,12 @@ async function submitDeposit() {
 
     try {
         const data = await post('/api/deposit/create', { amount });
-        // Show invoice info
         document.getElementById('deposit-invoice-section').style.display = 'block';
         document.getElementById('deposit-input-section').style.display = 'none';
         document.getElementById('deposit-pay-amount').textContent = `${data.amount} USDT`;
         document.getElementById('deposit-credited').textContent = `${data.credited} USDT (после комиссии ${data.commission_pct}%)`;
-        const payBtn = document.getElementById('deposit-pay-btn');
-        payBtn.onclick = () => window.open(data.pay_url, '_blank');
-        if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+        document.getElementById('deposit-pay-btn').onclick = () => window.open(data.pay_url, '_blank');
+        tg?.HapticFeedback?.notificationOccurred('success');
     } catch (e) {
         showToast(e.message || 'Ошибка создания счёта', true);
         btn.disabled = false;
@@ -221,11 +214,11 @@ function resetDepositScreen() {
     if (btn) { btn.disabled = false; btn.textContent = 'Создать счёт'; }
 }
 
-/* ── Withdraw ───────────────────────────────────────────────────── */
+/* ── Withdraw ─────────────────────────────────────────────────────── */
 function showWithdraw() {
     openScreen('screen-withdraw');
     const me = state.me;
-    const wdPct = Math.round(((me?.withdraw_commission) || 0.08) * 100);
+    const wdPct = Math.round((me?.withdraw_commission || 0.08) * 100);
     const bal = (state.balance || 0).toFixed(4);
     document.getElementById('withdraw-alert').innerHTML =
         `Мин. сумма: <b>30 USDT</b> · Комиссия: <b>${wdPct}%</b><br>Ваш баланс: <b>${bal} USDT</b>`;
@@ -240,13 +233,13 @@ async function submitWithdraw() {
 
     const wdComm = state.me?.withdraw_commission || 0.08;
     const net = (amount * (1 - wdComm)).toFixed(4);
-    const confirmed = confirm(`Вывод: ${amount} USDT\nКомиссия ${Math.round(wdComm*100)}%\nПолучите: ${net} USDT\n\nПодтвердить?`);
-    if (!confirmed) return;
+    if (!confirm(`Вывод: ${amount} USDT\nКомиссия ${Math.round(wdComm * 100)}%\nПолучите: ${net} USDT\n\nПодтвердить?`)) return;
 
     try {
         const data = await post('/api/withdraw', { amount, address });
         showToast(`Заявка создана! К выплате: ${data.net_amount} USDT`);
         state.balance -= amount;
+        if (state.me) state.me.balance = state.balance;
         updateWalletUI(state.me);
         setTimeout(closeScreen, 1500);
     } catch (e) {
@@ -254,21 +247,31 @@ async function submitWithdraw() {
     }
 }
 
-/* ── Bundles Tab ─────────────────────────────────────────────────── */
+/* ── Bundles Tab ──────────────────────────────────────────────────── */
+let _bundlesFetching = false;
+
 async function loadBundles() {
+    if (_bundlesFetching) return;
+    _bundlesFetching = true;
     try {
         const data = await get('/api/bundles');
         state.bundles = data;
         renderBundleGrid(data.available_coins);
         renderActiveBundles(data.active_bundles);
     } catch (e) {
-        document.getElementById('bundles-grid').innerHTML = '<div class="empty-state">Не удалось загрузить данные</div>';
+        document.getElementById('bundles-grid').innerHTML =
+            '<div class="empty-state">Не удалось загрузить данные</div>';
+    } finally {
+        _bundlesFetching = false;
     }
 }
 
 function renderBundleGrid(coins) {
     const grid = document.getElementById('bundles-grid');
-    if (!coins?.length) { grid.innerHTML = '<div class="empty-state" style="grid-column:span 2">Нет монет</div>'; return; }
+    if (!coins?.length) {
+        grid.innerHTML = '<div class="empty-state" style="grid-column:span 2">Нет монет</div>';
+        return;
+    }
     grid.innerHTML = coins.map(c => {
         const cfg = c.config;
         const minAmt = Array.isArray(cfg) ? cfg[3] : 10;
@@ -283,12 +286,15 @@ function renderBundleGrid(coins) {
 
 function renderActiveBundles(active) {
     const list = document.getElementById('active-bundles-list');
-    if (!active?.length) { list.innerHTML = '<div class="empty-state">Нет активных связок</div>'; return; }
+    if (!active?.length) {
+        list.innerHTML = '<div class="empty-state">Нет активных связок</div>';
+        return;
+    }
     list.innerHTML = active.map(b => {
         const pct    = (b.progress || 0).toFixed(0);
         const profit = (b.current_profit || 0).toFixed(4);
         return `<div class="active-bundle-card">
-            <div class="ab-header"><div class="ab-coin">${b.coin}</div><div class="ab-profit">+${profit} USDT</div></div>
+            <div class="ab-header"><div class="ab-coin">${b.coin || '—'}</div><div class="ab-profit">+${profit} USDT</div></div>
             <div class="ab-bar"><div class="ab-bar-fill" style="width:${pct}%"></div></div>
         </div>`;
     }).join('');
@@ -307,7 +313,7 @@ function selectBundle(ticker) {
     document.getElementById('launch-balance-hint').textContent = `Баланс: ${(state.balance || 0).toFixed(4)} USDT`;
     document.getElementById('launch-amount').value = '';
     openBottomSheet();
-    if (tg?.HapticFeedback) tg.HapticFeedback.impactOccurred('medium');
+    tg?.HapticFeedback?.impactOccurred('medium');
 }
 
 function setMaxAmount() {
@@ -324,13 +330,13 @@ async function submitLaunch() {
         showToast(`Связка ${coin} запущена!`);
         closeBottomSheet();
         setTimeout(() => { loadBundles(); loadWallet(); }, 800);
-        if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+        tg?.HapticFeedback?.notificationOccurred('success');
     } catch (e) {
         showToast(e.message || 'Ошибка запуска', true);
     }
 }
 
-/* ── More Tab ────────────────────────────────────────────────────── */
+/* ── More Tab ─────────────────────────────────────────────────────── */
 function loadMore() {
     if (!state.me) { loadWallet().then(updateMoreProfile); return; }
     updateMoreProfile();
@@ -344,11 +350,11 @@ function updateMoreProfile() {
     document.getElementById('profile-sys-id').textContent = me.system_id || '—';
     document.getElementById('profile-tg-id').textContent  = me.telegram_id || '—';
 
-    // Show subscription status in more tab
     const subEl = document.getElementById('profile-subscription');
     if (subEl) {
         if (me.subscription_active) {
-            const expiry = me.subscription_expiry ? new Date(me.subscription_expiry).toLocaleDateString('ru') : '—';
+            const expiry = me.subscription_expiry
+                ? new Date(me.subscription_expiry).toLocaleDateString('ru') : '—';
             subEl.textContent = `⭐ Quantum+ активен до ${expiry}`;
             subEl.style.color = '#8B5CF6';
         } else {
@@ -358,12 +364,11 @@ function updateMoreProfile() {
     }
 }
 
-/* ── Referrals ───────────────────────────────────────────────────── */
+/* ── Referrals ────────────────────────────────────────────────────── */
 async function showReferrals() {
     openScreen('screen-referrals');
     try {
         const data = await get('/api/referrals');
-        state.referrals = data;
         document.getElementById('ref-count').textContent = data.referral_count || 0;
         document.getElementById('ref-bonus').textContent = (data.referral_bonus || 0).toFixed(2);
         document.getElementById('ref-link-display').textContent = data.link || '—';
@@ -377,24 +382,37 @@ function copyRefLink() {
     if (link && link !== '—') copyText(link, 'Ссылка скопирована');
 }
 
-/* ── Support ─────────────────────────────────────────────────────── */
+/* ── Support ──────────────────────────────────────────────────────── */
 function showSupport() {
     openScreen('screen-support');
     setTimeout(() => document.getElementById('support-input')?.focus(), 300);
 }
 
+let _supportSending = false;
+
 async function sendSupportMessage() {
+    if (_supportSending) return;
     const input   = document.getElementById('support-input');
     const message = input.value.trim();
     if (!message) return;
+
+    _supportSending = true;
     appendChatMessage(message, 'outgoing');
     input.value = '';
+
     try {
         const data = await post('/api/support', { message });
         appendChatMessage(`✅ Обращение #${data.ticket_id} принято! Ответим в ближайшее время.`, 'incoming');
-        if (tg?.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+        tg?.HapticFeedback?.notificationOccurred('success');
     } catch (e) {
-        appendChatMessage(`❌ ${e.message || 'Не удалось отправить'}`, 'incoming');
+        const msg = e.message || 'Не удалось отправить';
+        // Показываем понятное сообщение вместо технического
+        const friendly = msg.includes('5 минут')
+            ? '⏳ Подождите 5 минут перед следующим обращением.'
+            : `❌ ${msg}`;
+        appendChatMessage(friendly, 'incoming');
+    } finally {
+        _supportSending = false;
     }
 }
 
@@ -407,31 +425,31 @@ function appendChatMessage(text, direction) {
     container.scrollTop = container.scrollHeight;
 }
 
-/* ── Quantum+ ────────────────────────────────────────────────────── */
+/* ── Quantum+ ─────────────────────────────────────────────────────── */
 function showQuantumPlus() {
     openScreen('screen-plus');
     const me = state.me;
-    const depPct = Math.round(((me?.deposit_commission) || 0.07) * 100);
-    const plusDepPct = 3;
-    const wdPct = Math.round(((me?.withdraw_commission) || 0.08) * 100);
-    const limit = me?.subscription_active ? 300 : 100;
+    const depPct     = Math.round((me?.deposit_commission || 0.07) * 100);
+    const wdPct      = Math.round((me?.withdraw_commission || 0.08) * 100);
+    const currentLim = me?.subscription_active ? 300 : 100;
 
     const statusEl = document.getElementById('plus-status');
     const buyBtn   = document.getElementById('plus-buy-btn');
     if (me?.subscription_active) {
-        const expiry = me.subscription_expiry ? new Date(me.subscription_expiry).toLocaleDateString('ru') : '—';
+        const expiry = me.subscription_expiry
+            ? new Date(me.subscription_expiry).toLocaleDateString('ru') : '—';
         if (statusEl) statusEl.innerHTML = `✅ <b>Quantum+ активен</b> до ${expiry}`;
         if (buyBtn) buyBtn.style.display = 'none';
     } else {
-        if (statusEl) statusEl.innerHTML = `Вы не подписчик Quantum+`;
+        if (statusEl) statusEl.innerHTML = 'Вы не подписчик Quantum+';
         if (buyBtn) buyBtn.style.display = 'block';
     }
 
     const infoEl = document.getElementById('plus-info');
     if (infoEl) infoEl.innerHTML = `
         <div class="info-text">
-            <p>🔄 <b>300 операций</b> вместо ${limit}</p>
-            <p>💸 Комиссия пополнения <b>${plusDepPct}%</b> вместо ${depPct}%</p>
+            <p>🔄 <b>300 операций</b> вместо ${currentLim}</p>
+            <p>💸 Комиссия пополнения <b>3%</b> вместо ${depPct}%</p>
             <p>💸 Комиссия вывода: <b>${wdPct}%</b></p>
             <p>🚀 Приоритет обработки заявок</p>
             <p>⏳ Срок: 30 дней · Стоимость: <b>40 USDT</b></p>
@@ -445,14 +463,14 @@ async function buyQuantumPlus() {
         const data = await post('/api/plus/buy', {});
         showToast('Счёт создан!');
         window.open(data.pay_url, '_blank');
-        if (btn) { btn.disabled = false; btn.textContent = 'Купить Quantum+ (40 USDT)'; }
     } catch (e) {
         showToast(e.message || 'Ошибка', true);
+    } finally {
         if (btn) { btn.disabled = false; btn.textContent = 'Купить Quantum+ (40 USDT)'; }
     }
 }
 
-/* ── Info & FAQ ──────────────────────────────────────────────────── */
+/* ── Info & FAQ ───────────────────────────────────────────────────── */
 function showInfo() { openScreen('screen-info'); }
 function showFAQ()  { openScreen('screen-faq'); }
 
@@ -466,7 +484,7 @@ function toggleAccordion(item) {
     if (!isOpen) {
         item.classList.add('open');
         content.style.display = 'block';
-        if (tg?.HapticFeedback) tg.HapticFeedback.selectionChanged();
+        tg?.HapticFeedback?.selectionChanged();
     }
 }
 
@@ -475,23 +493,32 @@ function showTransactions() {
     setTimeout(() => document.getElementById('history-list')?.scrollIntoView({ behavior: 'smooth' }), 100);
 }
 
-/* ── DOMContentLoaded ────────────────────────────────────────────── */
+/* ── Auto-refresh active bundles (с защитой от накопления) ────────── */
+setInterval(() => {
+    if (currentTab === 'bundles' && state.bundles && !_bundlesFetching) {
+        _bundlesFetching = true;
+        get('/api/bundles').then(data => {
+            state.bundles = data;
+            renderActiveBundles(data.active_bundles);
+        }).catch(() => {}).finally(() => { _bundlesFetching = false; });
+    }
+}, 8000);
+
+/* ── DOMContentLoaded ─────────────────────────────────────────────── */
 document.addEventListener('DOMContentLoaded', () => {
-    // Support input Enter key
     document.getElementById('support-input')?.addEventListener('keypress', e => {
         if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendSupportMessage(); }
     });
 
-    // Deposit screen reset on open
+    // Reset deposit screen when opened
     const depScreen = document.getElementById('screen-deposit');
     if (depScreen) {
-        const observer = new MutationObserver(() => {
+        new MutationObserver(() => {
             if (depScreen.classList.contains('open')) resetDepositScreen();
-        });
-        observer.observe(depScreen, { attributes: true, attributeFilter: ['class'] });
+        }).observe(depScreen, { attributes: true, attributeFilter: ['class'] });
     }
 
-    // Wire More tab menu items by ID — prevents FAQ opening instead of support
+    // Wire More tab menu items
     const menuItems = {
         'menu-support': showSupport,
         'menu-faq':     showFAQ,
@@ -512,19 +539,9 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 });
 
-/* ── Auto-refresh active bundles ─────────────────────────────────── */
-setInterval(() => {
-    if (currentTab === 'bundles' && state.bundles) {
-        get('/api/bundles').then(data => {
-            state.bundles = data;
-            renderActiveBundles(data.active_bundles);
-        }).catch(() => {});
-    }
-}, 5000);
-
-/* ── Init ────────────────────────────────────────────────────────── */
-init().catch(console.error);
-
+/* ── Init ─────────────────────────────────────────────────────────── */
 async function init() {
     await loadWallet();
 }
+
+init().catch(console.error);
