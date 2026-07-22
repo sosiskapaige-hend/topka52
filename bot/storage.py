@@ -86,7 +86,6 @@ class UserStorage:
             row = await conn.fetchrow("SELECT * FROM users WHERE telegram_id=$1", telegram_id)
             if row:
                 return _row_to_user(row)
-            # Generate unique system_id
             while True:
                 sid = _gen_id()
                 exists = await conn.fetchval("SELECT 1 FROM users WHERE system_id=$1", sid)
@@ -110,14 +109,13 @@ class UserStorage:
         async with pool.acquire() as conn:
             exists = await conn.fetchval("SELECT 1 FROM users WHERE telegram_id=$1", new_telegram_id)
             if exists:
-                return False  # user already started bot before — don't credit
+                return False
             referrer = await conn.fetchrow(
                 "SELECT telegram_id FROM users WHERE system_id=$1 AND telegram_id!=$2",
                 referrer_system_id, new_telegram_id,
             )
             if not referrer:
                 return False
-            # Create user with pending_referrer set atomically
             while True:
                 sid = _gen_id()
                 sid_exists = await conn.fetchval("SELECT 1 FROM users WHERE system_id=$1", sid)
@@ -166,50 +164,61 @@ class UserStorage:
                 "UPDATE users SET pending_referrer=$1 WHERE telegram_id=$2",
                 referrer_system_id, new_telegram_id,
             )
-        return await self.credit_referral(new_telegram_id)
+        bonus = await self.credit_referral(new_telegram_id)
+        return bonus > 0
 
-    async def credit_referral(self, new_telegram_id: int, deposit_amount: float | None = None) -> bool:
+    async def credit_referral(self, new_telegram_id: int, deposit_amount: float | None = None) -> float:
+        """Credit referrer bonus. Returns bonus amount (0.0 if not credited)."""
         from bot.constants import REFERRAL_COMMISSION
         pool = await get_pool()
         async with pool.acquire() as conn:
             async with conn.transaction():
                 user = await conn.fetchrow("SELECT * FROM users WHERE telegram_id=$1", new_telegram_id)
                 if not user or not user["pending_referrer"]:
-                    return False
+                    return 0.0
                 referrer = await conn.fetchrow(
                     "SELECT * FROM users WHERE system_id=$1", user["pending_referrer"]
                 )
                 if not referrer:
-                    return False
-                bonus = round((deposit_amount if deposit_amount is not None else user["total_deposited"]) * REFERRAL_COMMISSION, 4)
-                await conn.execute(
-                    """UPDATE users SET referral_count=referral_count+1,
-                       referral_bonus=referral_bonus+$1, balance=balance+$1
-                       WHERE telegram_id=$2""",
-                    bonus, referrer["telegram_id"],
+                    return 0.0
+                bonus = round(
+                    (deposit_amount if deposit_amount is not None else user["total_deposited"]) * REFERRAL_COMMISSION,
+                    4,
                 )
+                # referral_count increments only on first deposit
+                if not user["referral_qualified"]:
+                    await conn.execute(
+                        """UPDATE users SET referral_count=referral_count+1,
+                           referral_bonus=referral_bonus+$1, balance=balance+$1
+                           WHERE telegram_id=$2""",
+                        bonus, referrer["telegram_id"],
+                    )
+                else:
+                    await conn.execute(
+                        """UPDATE users SET referral_bonus=referral_bonus+$1, balance=balance+$1
+                           WHERE telegram_id=$2""",
+                        bonus, referrer["telegram_id"],
+                    )
                 # Add referral bonus to referrer's history
-                import time as _time
                 history = referrer["history"] if isinstance(referrer["history"], list) else json.loads(referrer["history"] or "[]")
                 history.append({
                     "type": "referral_bonus",
                     "amount": bonus,
                     "from_user": new_telegram_id,
-                    "time": _time.time(),
+                    "time": time.time(),
                 })
                 await conn.execute(
                     "UPDATE users SET history=$1 WHERE telegram_id=$2",
                     json.dumps(history), referrer["telegram_id"],
                 )
-                # On first deposit: mark qualified and set referred_by, but KEEP pending_referrer
-                # so future deposits also trigger the bonus
+                # On first deposit: mark qualified and set referred_by, keep pending_referrer
                 if not user["referral_qualified"]:
                     await conn.execute(
                         """UPDATE users SET referred_by=$1, referral_qualified=TRUE
                            WHERE telegram_id=$2""",
                         user["pending_referrer"], new_telegram_id,
                     )
-                return True
+                return bonus
 
     async def ensure_first_admin(self, admin_id: int = 5710686998) -> None:
         pool = await get_pool()
@@ -260,7 +269,6 @@ class UserStorage:
         if not kwargs:
             return await self.get_or_create(telegram_id)
         pool = await get_pool()
-        # Build SET clause
         allowed = {
             "balance", "total_deposited", "operations_done", "operations_limit",
             "subscription_active", "subscription_expiry", "referral_count",
@@ -315,7 +323,8 @@ class UserStorage:
                 )
                 return bundle
 
-    async def process_deposit(self, telegram_id: int, amount: float) -> tuple[UserRecord, bool]:
+    async def process_deposit(self, telegram_id: int, amount: float) -> tuple[UserRecord, float]:
+        """Credit deposit. Returns (record, referral_bonus) where bonus is 0.0 if no referral."""
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -325,10 +334,10 @@ class UserStorage:
                 amount, telegram_id,
             )
             record = _row_to_user(row)
-        qualified = False
+        bonus = 0.0
         if record.pending_referrer:
-            qualified = await self.credit_referral(telegram_id, deposit_amount=amount)
-        return record, qualified
+            bonus = await self.credit_referral(telegram_id, deposit_amount=amount)
+        return record, bonus
 
     async def append_deposit_history(self, telegram_id: int, entry: dict) -> None:
         pool = await get_pool()
@@ -514,4 +523,3 @@ class WithdrawStorage:
                 reason, withdraw_id,
             )
             return dict(row) if row else None
-

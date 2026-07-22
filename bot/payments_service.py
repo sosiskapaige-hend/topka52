@@ -129,10 +129,10 @@ async def try_complete_payment(
             from bot.constants import DEPOSIT_COMMISSION, DEPOSIT_COMMISSION_PLUS
             commission = DEPOSIT_COMMISSION_PLUS if record_pre.subscription_active else DEPOSIT_COMMISSION
             credited = round(amt * (1 - commission), 4)
-            record, referral_credited = await storage.process_deposit(user_id, credited)
+            record, referral_bonus = await storage.process_deposit(user_id, credited)
             await storage.append_deposit_history(user_id, _deposit_history_entry(invoice_id, credited, currency))
-            if referral_credited:
-                await _notify_referrer(storage, record)
+            if referral_bonus:
+                await _notify_referrer(storage, record, bonus=referral_bonus)
     except Exception:
         await payments.release_crediting(invoice_id)
         raise
@@ -147,39 +147,36 @@ async def try_complete_payment(
     }
 
 
-async def _notify_referrer(storage: UserStorage, referral_record) -> None:
+async def _notify_referrer(storage: UserStorage, referral_record, bonus: float | None = None) -> None:
     """Send notification to referrer about referral bonus."""
-    if not referral_record.referred_by and not referral_record.pending_referrer:
-        return
     ref_system_id = referral_record.referred_by or referral_record.pending_referrer
+    if not ref_system_id:
+        return
     try:
         from bot.db import get_pool
         pool = await get_pool()
         async with pool.acquire() as conn:
             referrer_row = await conn.fetchrow(
-                "SELECT * FROM users WHERE system_id=$1", ref_system_id
+                "SELECT telegram_id, referral_bonus FROM users WHERE system_id=$1", ref_system_id
             )
         if not referrer_row:
+            logger.warning("_notify_referrer: referrer with system_id=%s not found", ref_system_id)
             return
         import main
         if not (hasattr(main, "ptb_app") and main.ptb_app):
+            logger.warning("_notify_referrer: ptb_app not available")
             return
         from telegram import InlineKeyboardMarkup, InlineKeyboardButton
         from bot.constants import CB_REFERRALS, REFERRAL_COMMISSION
-        # Find the latest referral_bonus entry to get exact bonus amount
-        history = referrer_row["history"] if isinstance(referrer_row["history"], list) else []
-        bonus = next(
-            (e["amount"] for e in reversed(history) if e.get("type") == "referral_bonus" and e.get("from_user") == referral_record.telegram_id),
-            0.0
-        )
         pct = int(REFERRAL_COMMISSION * 100)
+        bonus_str = f"{bonus:.2f}" if bonus is not None else "?"
         await main.ptb_app.bot.send_message(
             chat_id=referrer_row["telegram_id"],
             text=(
                 f"🎉 <b>Реферальный бонус получен!</b>\n"
                 f"────────────────────\n"
                 f"👤 Ваш реферал пополнил баланс\n"
-                f"💰 Вам начислено: <b>+{bonus:.2f} USDT</b> ({pct}%)\n"
+                f"💰 Вам начислено: <b>+{bonus_str} USDT</b> ({pct}%)\n"
                 f"📊 Всего заработано: <b>{referrer_row['referral_bonus']:.2f} USDT</b>\n"
                 f"────────────────────"
             ),
@@ -187,7 +184,7 @@ async def _notify_referrer(storage: UserStorage, referral_record) -> None:
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("👥 Мои рефералы", callback_data=CB_REFERRALS)]])
         )
     except Exception as e:
-        logger.error("Failed to notify referrer: %s", e)
+        logger.error("Failed to notify referrer: %s", e, exc_info=True)
 
 
 async def notify_deposit_success(result: dict) -> None:
