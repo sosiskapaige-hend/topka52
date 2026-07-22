@@ -845,15 +845,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     logger.info(f"✓ start_command called for user {user.id}")
     storage = _storage(context)
-    await storage.get_or_create(user.id)
-
     if context.args:
         arg = context.args[0]
         if arg.startswith("ref_"):
             referrer_system_id = arg.removeprefix("ref_").strip()
             if referrer_system_id:
-                await storage.register_referral(user.id, referrer_system_id)
+                await storage.register_referral_new_only(user.id, referrer_system_id)
 
+    await storage.get_or_create(user.id)
     await show_main_menu(update, context, edit=False)
 
 

@@ -104,11 +104,38 @@ class UserStorage:
         record = await self.get_or_create(telegram_id)
         return f"https://t.me/{self._bot_name}?start=ref_{record.system_id}"
 
+    async def register_referral_new_only(self, new_telegram_id: int, referrer_system_id: str) -> bool:
+        """Register referral only if user doesn't exist yet (first-time /start via ref link)."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            exists = await conn.fetchval("SELECT 1 FROM users WHERE telegram_id=$1", new_telegram_id)
+            if exists:
+                return False  # user already started bot before — don't credit
+            referrer = await conn.fetchrow(
+                "SELECT telegram_id FROM users WHERE system_id=$1 AND telegram_id!=$2",
+                referrer_system_id, new_telegram_id,
+            )
+            if not referrer:
+                return False
+            # Create user with pending_referrer set atomically
+            while True:
+                sid = _gen_id()
+                sid_exists = await conn.fetchval("SELECT 1 FROM users WHERE system_id=$1", sid)
+                if not sid_exists:
+                    break
+            await conn.execute(
+                """INSERT INTO users (telegram_id, system_id, pending_referrer)
+                   VALUES ($1, $2, $3)
+                   ON CONFLICT (telegram_id) DO NOTHING""",
+                new_telegram_id, sid, referrer_system_id,
+            )
+            return True
+
     async def register_referral(self, new_telegram_id: int, referrer_system_id: str) -> bool:
         pool = await get_pool()
         async with pool.acquire() as conn:
             user = await conn.fetchrow("SELECT * FROM users WHERE telegram_id=$1", new_telegram_id)
-            if not user or user["referred_by"] or user["referral_qualified"]:
+            if not user or user["referral_qualified"] or user["referred_by"]:
                 return False
             referrer = await conn.fetchrow(
                 "SELECT telegram_id FROM users WHERE system_id=$1 AND telegram_id!=$2",
