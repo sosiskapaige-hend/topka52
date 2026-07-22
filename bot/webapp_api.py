@@ -97,6 +97,13 @@ def _rate_limit(request: Request, limit: int = 60, window: int = 60):
         raise HTTPException(status_code=429, detail="Too many requests")
 
 
+def _get_ptb_app():
+    """Read ptb_app from __main__ module to avoid stale import reference."""
+    import sys
+    main_mod = sys.modules.get("__main__") or sys.modules.get("main")
+    return getattr(main_mod, "ptb_app", None) if main_mod else None
+
+
 # ── App ───────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Quantum WebApp API")
@@ -183,15 +190,20 @@ async def _start_bundle_completer():
     """Background loop that completes expired bundles every 30s."""
     async def _loop():
         import json as _json
-        import main as _main
-        from bot.handlers import _finish_bundle_task
         from bot.db import get_pool
 
-        # Wait until storage and ptb_app are ready
+        logger.info("Bundle completer: waiting for storage and ptb_app...")
         for _ in range(60):
-            if _storage and getattr(_main, "ptb_app", None):
+            if _storage and _get_ptb_app():
                 break
             await asyncio.sleep(1)
+
+        if not _storage:
+            logger.error("Bundle completer: _storage is None, aborting")
+            return
+        if not _get_ptb_app():
+            logger.error("Bundle completer: ptb_app is None, aborting")
+            return
 
         logger.info("Bundle completer started")
         while True:
@@ -216,7 +228,7 @@ async def _start_bundle_completer():
                             if not completed:
                                 logger.warning("complete_bundle returned None for bundle %s user %s", bundle_id, uid)
                                 continue
-                            ptb = getattr(_main, "ptb_app", None)
+                            ptb = _get_ptb_app()
                             if not ptb:
                                 logger.warning("ptb_app is None, cannot notify user %s", uid)
                                 continue
@@ -240,11 +252,11 @@ async def _start_bundle_completer():
                                     ),
                                     reply_markup=keyboard,
                                 )
-                                logger.info("Notified user %s about bundle %s completion", uid, bundle_id)
+                                logger.info("Notified user %s about bundle %s", uid, bundle_id)
                             except Exception as e:
-                                logger.error("Failed to notify user %s about bundle %s: %s", uid, bundle_id, e)
+                                logger.error("Failed to notify user %s bundle %s: %s", uid, bundle_id, e, exc_info=True)
             except Exception as e:
-                logger.error("Bundle completer error: %s", e)
+                logger.error("Bundle completer error: %s", e, exc_info=True)
             await asyncio.sleep(30)
 
     asyncio.create_task(_loop())
@@ -480,8 +492,8 @@ async def send_support(
 
     ticket_id = await tickets.create_ticket(uid, uname_str, req.message)
 
-    import main
-    if hasattr(main, "ptb_app") and main.ptb_app:
+    ptb = _get_ptb_app()
+    if ptb:
         try:
             admins = await storage.get_all_admins()
             escaped_text = html.escape(req.message)
@@ -493,7 +505,7 @@ async def send_support(
             )
             for admin_id in admins:
                 asyncio.create_task(
-                    main.ptb_app.bot.send_message(chat_id=admin_id, text=msg, parse_mode="HTML")
+                    ptb.bot.send_message(chat_id=admin_id, text=msg, parse_mode="HTML")
                 )
         except Exception as e:
             logger.error("Failed to notify admins about ticket %s: %s", ticket_id, e)
@@ -663,8 +675,8 @@ async def request_withdraw(
         address=req.address,
     )
 
-    import main
-    if hasattr(main, "ptb_app"):
+    ptb = _get_ptb_app()
+    if ptb:
         admins = await storage.get_all_admins()
         msg = (
             f"💸 <b>Новая заявка на вывод! (WebApp)</b>\n\n"
@@ -678,7 +690,7 @@ async def request_withdraw(
         markup = InlineKeyboardMarkup([[InlineKeyboardButton("🔧 Админ-панель", callback_data=CB_ADMIN_PANEL)]])
         for admin_id in admins:
             asyncio.create_task(
-                main.ptb_app.bot.send_message(chat_id=admin_id, text=msg, parse_mode="HTML", reply_markup=markup)
+                ptb.bot.send_message(chat_id=admin_id, text=msg, parse_mode="HTML", reply_markup=markup)
             )
 
     return {"status": "success", "withdraw_id": withdraw_id, "net_amount": net_amount}
