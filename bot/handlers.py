@@ -141,9 +141,11 @@ async def show_bundles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if user is None:
         return
     record = await _storage(context).get_or_create(user.id)
+    from bot.constants import PLUS_OPERATIONS_LIMIT
+    limit = PLUS_OPERATIONS_LIMIT if record.subscription_active else (record.operations_limit or OPERATIONS_LIMIT)
     text = texts.BUNDLES.format(
         done=record.operations_done,
-        limit=record.operations_limit or OPERATIONS_LIMIT,
+        limit=limit,
     )
     query = update.callback_query
     if query is None:

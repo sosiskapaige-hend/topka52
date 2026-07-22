@@ -306,7 +306,8 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     record = await storage.get_or_create(target_id)
     new_sub = not record.subscription_active
     expiry = (datetime.datetime.now() + datetime.timedelta(days=30)).isoformat() if new_sub else None
-    await storage.update_user(target_id, subscription_active=new_sub, subscription_expiry=expiry)
+    new_limit = 300 if new_sub else 100
+    await storage.update_user(target_id, subscription_active=new_sub, subscription_expiry=expiry, operations_limit=new_limit)
     status = "⭐ получил подписку Quantum+ (30 дней)" if new_sub else "лишился подписки Quantum+"
     await update.message.reply_text(f"✅ Пользователь {target_id} {status}.")
 

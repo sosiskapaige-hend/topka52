@@ -277,8 +277,9 @@ async def get_me(request: Request, user=Depends(get_current_user), storage: User
     _rate_limit(request, limit=60, window=60)
     uid = user['id']
     record = storage.get_or_create(uid)
-    from bot.constants import DEPOSIT_COMMISSION, DEPOSIT_COMMISSION_PLUS, WITHDRAW_COMMISSION
+    from bot.constants import DEPOSIT_COMMISSION, DEPOSIT_COMMISSION_PLUS, WITHDRAW_COMMISSION, PLUS_OPERATIONS_LIMIT, OPERATIONS_LIMIT
     commission = DEPOSIT_COMMISSION_PLUS if record.subscription_active else DEPOSIT_COMMISSION
+    ops_limit = PLUS_OPERATIONS_LIMIT if record.subscription_active else (record.operations_limit or OPERATIONS_LIMIT)
     return {
         "telegram_id": uid,
         "system_id": record.system_id,
@@ -290,7 +291,7 @@ async def get_me(request: Request, user=Depends(get_current_user), storage: User
         "subscription_active": record.subscription_active,
         "subscription_expiry": record.subscription_expiry,
         "operations_done": record.operations_done,
-        "operations_limit": record.operations_limit,
+        "operations_limit": ops_limit,
         "is_banned": record.is_banned,
         "deposit_commission": commission,
         "withdraw_commission": WITHDRAW_COMMISSION,
