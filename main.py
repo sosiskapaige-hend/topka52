@@ -146,7 +146,7 @@ def _start_xrocket_poller(app: Application) -> None:
                             info = await xrocket.get_invoice(str(invoice_id))
                             if not invoice_is_paid(info):
                                 continue
-                            result = try_complete_payment(
+                            result = await try_complete_payment(
                                 payments, storage, str(invoice_id),
                                 external_meta=info if isinstance(info, dict) else None,
                             )
@@ -176,8 +176,6 @@ def _build_application(webapp_url: str | None, bot_name: str) -> Application:
     application.bot_data["withdrawals"] = withdrawals
     application.bot_data["payments"] = payments
     application.bot_data["webapp_url"] = webapp_url
-
-    storage.ensure_first_admin(5710686998)
 
     # ── Conversation: deposit ────────────────────────────────────────────────
     deposit_conv = ConversationHandler(
@@ -357,9 +355,17 @@ async def _main_async() -> None:
     if webapp_url and not webapp_url.startswith("https://"):
         logger.warning("WEBAPP_URL is not HTTPS — Telegram WebApp button will not work")
 
+    # Initialize PostgreSQL pool (Neon)
+    from bot.db import init_pool, close_pool
+    await init_pool()
+    logger.info("PostgreSQL pool initialized")
+
     # Build PTB app
     application = _build_application(webapp_url, bot_name)
     ptb_app = application
+
+    # Ensure first admin exists in DB
+    await application.bot_data["storage"].ensure_first_admin(5710686998)
 
     # Wire FastAPI to shared storage
     import bot.webapp_api as webapp_api

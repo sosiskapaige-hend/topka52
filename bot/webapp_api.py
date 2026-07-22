@@ -162,7 +162,7 @@ async def _process_xrocket_payload(payload: dict, raw_body: bytes, x_sig: str | 
     if not invoice_id:
         return {"ok": True, "processed": False, "reason": "no_invoice_id"}
 
-    result = try_complete_payment(payments, storage, invoice_id, external_meta=payload)
+    result = await try_complete_payment(payments, storage, invoice_id, external_meta=payload)
     if result:
         schedule_deposit_notification(result)
     return {"ok": True, "processed": bool(result), "invoice_id": invoice_id}
@@ -257,7 +257,7 @@ async def _start_payment_poller():
                         info = await xrocket.get_invoice(str(invoice_id))
                         if not invoice_is_paid(info):
                             continue
-                        result = try_complete_payment(
+                        result = await try_complete_payment(
                             payments, storage, str(invoice_id), external_meta=info if isinstance(info, dict) else None
                         )
                         if result:
@@ -382,8 +382,8 @@ async def launch_bundle(request: Request, req: LaunchRequest, user=Depends(get_c
         "duration": duration
     }
     
-    storage.update_user(uid, balance=record.balance - req.amount)
-    storage.add_active_bundle(uid, bundle_data)
+    await storage.update_user(uid, balance=record.balance - req.amount)
+    await storage.add_active_bundle(uid, bundle_data)
     
     import main
     if hasattr(main, "ptb_app"):
@@ -436,7 +436,7 @@ async def send_support(request: Request, req: SupportRequest, user=Depends(get_c
     username = html.escape(user.get("username", ""))
     uname_str = f"{name} @{username} ({uid})" if username else f"{name} ({uid})"
     
-    ticket_id = tickets.create_ticket(uid, uname_str, req.message)
+    ticket_id = await tickets.create_ticket(uid, uname_str, req.message)
     
     # Notify admins via ptb_app if available
     import main
@@ -588,7 +588,7 @@ async def request_withdraw(request: Request, req: WithdrawRequest, user=Depends(
 
     net_amount = round(req.amount * (1 - WITHDRAW_COMMISSION), 4)
     # Deduct full amount immediately
-    storage.update_user(uid, balance=record.balance - req.amount)
+    await storage.update_user(uid, balance=record.balance - req.amount)
 
     import html
     name = user.get("first_name", "")

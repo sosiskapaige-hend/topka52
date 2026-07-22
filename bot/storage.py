@@ -1,18 +1,33 @@
+"""Async PostgreSQL-backed storage (Neon via asyncpg).
+
+Public API is identical to the old JSON-based storage so handlers need
+minimal changes — just add `await` before every storage call.
+"""
 from __future__ import annotations
 
 import json
 import logging
 import secrets
 import string
-import threading
-from dataclasses import asdict, dataclass, field, fields
-from pathlib import Path
-import logging
+import time
+from dataclasses import dataclass, field
+
+from bot.db import get_pool
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-DATA_FILE = DATA_DIR / "users.json"
+WITHDRAW_MIN_AMOUNT = 30.0
+
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+_ID_CHARS = string.ascii_uppercase + string.digits
+
+
+def _gen_id(length: int = 5) -> str:
+    return "".join(secrets.choice(_ID_CHARS) for _ in range(length))
+
+
+# ── UserRecord dataclass (in-memory view) ─────────────────────────────────────
 
 @dataclass
 class UserRecord:
@@ -32,569 +47,400 @@ class UserRecord:
     is_admin: bool = False
     is_banned: bool = False
     last_support_time: float = 0.0
-    pending_referrer: str | None = None     # system_id of referrer waiting to be credited
-    referral_qualified: bool = False        # True once user deposited 10+ USDT
+    pending_referrer: str | None = None
+    referral_qualified: bool = False
 
 
-def _generate_system_id(length: int = 5) -> str:
-    alphabet = string.ascii_uppercase + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
+def _row_to_user(row) -> UserRecord:
+    return UserRecord(
+        telegram_id=row["telegram_id"],
+        system_id=row["system_id"],
+        balance=row["balance"],
+        total_deposited=row["total_deposited"],
+        operations_done=row["operations_done"],
+        operations_limit=row["operations_limit"],
+        subscription_active=row["subscription_active"],
+        subscription_expiry=row["subscription_expiry"],
+        referral_count=row["referral_count"],
+        referral_bonus=row["referral_bonus"],
+        referred_by=row["referred_by"],
+        active_bundles=json.loads(row["active_bundles"]) if isinstance(row["active_bundles"], str) else (row["active_bundles"] or []),
+        history=json.loads(row["history"]) if isinstance(row["history"], str) else (row["history"] or []),
+        is_admin=row["is_admin"],
+        is_banned=row["is_banned"],
+        last_support_time=row["last_support_time"] or 0.0,
+        pending_referrer=row["pending_referrer"],
+        referral_qualified=row["referral_qualified"],
+    )
 
+
+# ── UserStorage ───────────────────────────────────────────────────────────────
 
 class UserStorage:
-    def __init__(self, path: Path = DATA_FILE, bot_name: str | None = None) -> None:
-        self._path = path
-        self._users: dict[int, UserRecord] = {}
-        self._lock = threading.RLock()
+    def __init__(self, bot_name: str | None = None) -> None:
         self._bot_name = bot_name or "quantumcryptobot"
-        self._dirty = False
-        self._load()
-        
-        # Start background save loop
-        self._save_thread = threading.Thread(target=self._flush_loop, daemon=True)
-        self._save_thread.start()
 
-    def _flush_loop(self):
-        import time
-        while True:
-            time.sleep(5)
-            if self._dirty:
-                with self._lock:
-                    if self._dirty:
-                        self._perform_save()
-                        self._dirty = False
-
-    def _load(self) -> None:
-        if not self._path.exists():
-            return
-        try:
-            content = self._path.read_text(encoding="utf-8").strip()
-            if not content:
-                return
-            raw = json.loads(content)
-            valid_fields = {f.name for f in fields(UserRecord)}
-            for item in raw:
-                filtered_item = {k: v for k, v in item.items() if k in valid_fields}
-                record = UserRecord(**filtered_item)
-                self._users[record.telegram_id] = record
-        except Exception as e:
-            logger.error(f"Error loading user storage from {self._path}: {e}", exc_info=True)
-
-    def _save_unlocked(self) -> None:
-        self._dirty = True
-
-    def _perform_save(self) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            payload = [asdict(record) for record in self._users.values()]
-            tmp_path = self._path.with_suffix(".tmp")
-            tmp_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2),
-                encoding="utf-8",
+    async def get_or_create(self, telegram_id: int) -> UserRecord:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM users WHERE telegram_id=$1", telegram_id)
+            if row:
+                return _row_to_user(row)
+            # Generate unique system_id
+            while True:
+                sid = _gen_id()
+                exists = await conn.fetchval("SELECT 1 FROM users WHERE system_id=$1", sid)
+                if not exists:
+                    break
+            row = await conn.fetchrow(
+                """INSERT INTO users (telegram_id, system_id) VALUES ($1, $2)
+                   ON CONFLICT (telegram_id) DO UPDATE SET telegram_id=EXCLUDED.telegram_id
+                   RETURNING *""",
+                telegram_id, sid,
             )
-            tmp_path.replace(self._path)
-        except Exception as e:
-            logger.error(f"Error saving user storage to {self._path}: {e}", exc_info=True)
+            return _row_to_user(row)
 
-    def _get_or_create_unlocked(self, telegram_id: int) -> UserRecord:
-        if telegram_id not in self._users:
-            system_id = _generate_system_id()
-            existing_ids = {u.system_id for u in self._users.values()}
-            while system_id in existing_ids:
-                system_id = _generate_system_id()
+    async def get_referral_link(self, telegram_id: int) -> str:
+        record = await self.get_or_create(telegram_id)
+        return f"https://t.me/{self._bot_name}?start=ref_{record.system_id}"
 
-            self._users[telegram_id] = UserRecord(
-                telegram_id=telegram_id,
-                system_id=system_id,
-            )
-            self._save_unlocked()
-        return self._users[telegram_id]
-
-    def get_or_create(self, telegram_id: int) -> UserRecord:
-        with self._lock:
-            return self._get_or_create_unlocked(telegram_id)
-
-    def get_referral_link(self, telegram_id: int) -> str:
-        with self._lock:
-            record = self._get_or_create_unlocked(telegram_id)
-            return f"https://t.me/{self._bot_name}?start=ref_{record.system_id}"
-
-    def register_referral(self, new_telegram_id: int, referrer_system_id: str) -> bool:
-        """Mark user as pending referral. Actual credit happens on first 10+ USDT deposit."""
-        with self._lock:
-            user = self._get_or_create_unlocked(new_telegram_id)
-            # If already qualified or already has a referrer set, skip
-            if user.referred_by is not None or user.referral_qualified:
+    async def register_referral(self, new_telegram_id: int, referrer_system_id: str) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            user = await conn.fetchrow("SELECT * FROM users WHERE telegram_id=$1", new_telegram_id)
+            if not user or user["referred_by"] or user["referral_qualified"]:
                 return False
-            # Can't refer yourself
-            referrer = next(
-                (u for u in self._users.values()
-                 if u.system_id == referrer_system_id and u.telegram_id != new_telegram_id),
-                None
+            referrer = await conn.fetchrow(
+                "SELECT telegram_id FROM users WHERE system_id=$1 AND telegram_id!=$2",
+                referrer_system_id, new_telegram_id,
             )
-            if referrer is None:
+            if not referrer:
                 return False
-            user.pending_referrer = referrer_system_id
-            self._save_unlocked()
+            await conn.execute(
+                "UPDATE users SET pending_referrer=$1 WHERE telegram_id=$2",
+                referrer_system_id, new_telegram_id,
+            )
             return True
 
-    def credit_referral(self, new_telegram_id: int) -> bool:
-        """Credit referrer when referred user qualifies (deposited 10+ USDT total). Returns True if credited."""
-        with self._lock:
-            user = self._users.get(new_telegram_id)
-            if user is None or user.referral_qualified:
-                return False
-            if not user.pending_referrer:
-                return False
-            referrer = next(
-                (u for u in self._users.values()
-                 if u.system_id == user.pending_referrer),
-                None
+    async def credit_referral(self, new_telegram_id: int) -> bool:
+        from bot.constants import REFERRAL_COMMISSION
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                user = await conn.fetchrow("SELECT * FROM users WHERE telegram_id=$1", new_telegram_id)
+                if not user or user["referral_qualified"] or not user["pending_referrer"]:
+                    return False
+                referrer = await conn.fetchrow(
+                    "SELECT * FROM users WHERE system_id=$1", user["pending_referrer"]
+                )
+                if not referrer:
+                    return False
+                bonus = round(user["total_deposited"] * REFERRAL_COMMISSION, 4)
+                await conn.execute(
+                    """UPDATE users SET referral_count=referral_count+1,
+                       referral_bonus=referral_bonus+$1, balance=balance+$1
+                       WHERE telegram_id=$2""",
+                    bonus, referrer["telegram_id"],
+                )
+                await conn.execute(
+                    """UPDATE users SET referred_by=$1, pending_referrer=NULL,
+                       referral_qualified=TRUE WHERE telegram_id=$2""",
+                    user["pending_referrer"], new_telegram_id,
+                )
+                return True
+
+    async def ensure_first_admin(self, admin_id: int = 5710686998) -> None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO users (telegram_id, system_id, is_admin)
+                   VALUES ($1, $2, TRUE)
+                   ON CONFLICT (telegram_id) DO UPDATE SET is_admin=TRUE""",
+                admin_id, _gen_id(),
             )
-            if referrer is None:
-                return False
-            from bot.constants import REFERRAL_COMMISSION
-            bonus = round(user.total_deposited * REFERRAL_COMMISSION, 4)
-            referrer.referral_count += 1
-            referrer.referral_bonus  += bonus
-            referrer.balance         += bonus
-            user.referred_by         = user.pending_referrer
-            user.pending_referrer    = None
-            user.referral_qualified  = True
-            self._save_unlocked()
-            return True
 
-    def ensure_first_admin(self, admin_id: int = 5710686998) -> None:
-        with self._lock:
-            record = self._get_or_create_unlocked(admin_id)
-            if not record.is_admin:
-                record.is_admin = True
-                self._save_unlocked()
-                logger.info(f"Granted admin rights to first admin {admin_id}")
+    async def get_all_admins(self) -> list[int]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT telegram_id FROM users WHERE is_admin=TRUE")
+            return [r["telegram_id"] for r in rows]
 
-    def get_all_admins(self) -> list[int]:
-        with self._lock:
-            return [uid for uid, user in self._users.items() if user.is_admin]
+    async def set_admin(self, telegram_id: int, is_admin: bool) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE users SET is_admin=$1 WHERE telegram_id=$2", is_admin, telegram_id
+            )
+            return result != "UPDATE 0"
 
-    def set_admin(self, telegram_id: int, is_admin: bool) -> bool:
-        with self._lock:
-            if telegram_id not in self._users:
-                return False
-            self._users[telegram_id].is_admin = is_admin
-            self._save_unlocked()
-            return True
+    async def set_banned(self, telegram_id: int, is_banned: bool) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            result = await conn.execute(
+                "UPDATE users SET is_banned=$1 WHERE telegram_id=$2", is_banned, telegram_id
+            )
+            return result != "UPDATE 0"
 
-    def set_banned(self, telegram_id: int, is_banned: bool) -> bool:
-        with self._lock:
-            if telegram_id not in self._users:
-                return False
-            self._users[telegram_id].is_banned = is_banned
-            self._save_unlocked()
-            return True
-            
-    def update_support_time(self, telegram_id: int, timestamp: float) -> None:
-        with self._lock:
-            record = self._get_or_create_unlocked(telegram_id)
-            record.last_support_time = timestamp
-            self._save_unlocked()
-            
-    def get_all_users(self) -> list[int]:
-        with self._lock:
-            return list(self._users.keys())
+    async def update_support_time(self, telegram_id: int, timestamp: float) -> None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET last_support_time=$1 WHERE telegram_id=$2", timestamp, telegram_id
+            )
 
-    def update_user(self, telegram_id: int, **kwargs) -> UserRecord:
-        with self._lock:
-            record = self._get_or_create_unlocked(telegram_id)
-            for key, value in kwargs.items():
-                if hasattr(record, key):
-                    setattr(record, key, value)
-            self._save_unlocked()
-            return record
+    async def get_all_users(self) -> list[int]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT telegram_id FROM users")
+            return [r["telegram_id"] for r in rows]
 
-    def add_active_bundle(self, telegram_id: int, bundle_data: dict) -> None:
-        with self._lock:
-            record = self._get_or_create_unlocked(telegram_id)
-            record.active_bundles.append(bundle_data)
-            self._save_unlocked()
+    async def update_user(self, telegram_id: int, **kwargs) -> UserRecord:
+        if not kwargs:
+            return await self.get_or_create(telegram_id)
+        pool = await get_pool()
+        # Build SET clause
+        allowed = {
+            "balance", "total_deposited", "operations_done", "operations_limit",
+            "subscription_active", "subscription_expiry", "referral_count",
+            "referral_bonus", "referred_by", "is_admin", "is_banned",
+            "last_support_time", "pending_referrer", "referral_qualified",
+        }
+        sets, vals = [], []
+        for k, v in kwargs.items():
+            if k in allowed:
+                sets.append(f"{k}=${len(vals)+1}")
+                vals.append(v)
+        if not sets:
+            return await self.get_or_create(telegram_id)
+        vals.append(telegram_id)
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"UPDATE users SET {', '.join(sets)} WHERE telegram_id=${len(vals)} RETURNING *",
+                *vals,
+            )
+            return _row_to_user(row)
 
-    def complete_bundle(self, telegram_id: int, bundle_id: str, profit: float) -> dict | None:
-        with self._lock:
-            record = self._get_or_create_unlocked(telegram_id)
-            # Find and remove from active
-            bundle = next((b for b in record.active_bundles if b.get("id") == bundle_id), None)
-            if bundle:
-                record.active_bundles = [b for b in record.active_bundles if b.get("id") != bundle_id]
-                # Update bundle with profit
+    async def add_active_bundle(self, telegram_id: int, bundle_data: dict) -> None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """UPDATE users SET active_bundles = active_bundles || $1::jsonb
+                   WHERE telegram_id=$2""",
+                json.dumps([bundle_data]), telegram_id,
+            )
+
+    async def complete_bundle(self, telegram_id: int, bundle_id: str, profit: float) -> dict | None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow("SELECT * FROM users WHERE telegram_id=$1 FOR UPDATE", telegram_id)
+                if not row:
+                    return None
+                bundles = json.loads(row["active_bundles"]) if isinstance(row["active_bundles"], str) else (row["active_bundles"] or [])
+                bundle = next((b for b in bundles if b.get("id") == bundle_id), None)
+                if not bundle:
+                    return None
                 bundle["profit"] = profit
-                record.history.append(bundle)
-                record.balance += bundle["amount"] + profit
-                record.operations_done += 1
-                self._save_unlocked()
-            return bundle
+                new_active = [b for b in bundles if b.get("id") != bundle_id]
+                history = json.loads(row["history"]) if isinstance(row["history"], str) else (row["history"] or [])
+                history.append(bundle)
+                await conn.execute(
+                    """UPDATE users SET active_bundles=$1, history=$2,
+                       balance=balance+$3, operations_done=operations_done+1
+                       WHERE telegram_id=$4""",
+                    json.dumps(new_active), json.dumps(history),
+                    bundle["amount"] + profit, telegram_id,
+                )
+                return bundle
 
-    def process_deposit(self, telegram_id: int, amount: float) -> tuple[UserRecord, bool]:
-        """Credit deposit and auto-qualify referral if threshold met. Returns (record, referral_credited)."""
-        with self._lock:
-            record = self._get_or_create_unlocked(telegram_id)
-            record.balance        += amount
-            record.total_deposited += amount
-            self._save_unlocked()
-            # Try to qualify referral (threshold = 10 USDT total deposited)
-            qualified = False
-            if not record.referral_qualified and record.total_deposited >= 10.0:
-                qualified = self.credit_referral(telegram_id)
-            return record, qualified
+    async def process_deposit(self, telegram_id: int, amount: float) -> tuple[UserRecord, bool]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """UPDATE users SET balance=balance+$1, total_deposited=total_deposited+$1
+                   WHERE telegram_id=$2 RETURNING *""",
+                amount, telegram_id,
+            )
+            record = _row_to_user(row)
+        qualified = False
+        if not record.referral_qualified and record.total_deposited >= 10.0:
+            qualified = await self.credit_referral(telegram_id)
+        return record, qualified
 
-    def append_deposit_history(self, telegram_id: int, entry: dict) -> None:
-        with self._lock:
-            record = self._get_or_create_unlocked(telegram_id)
-            record.history.append(entry)
-            self._save_unlocked()
-
-
-# ── Ticket Storage ───────────────────────────────────────────────────────────
-
-TICKETS_FILE = DATA_DIR / "tickets.json"
-
-TICKET_ID_CHARS = string.ascii_uppercase + string.digits
+    async def append_deposit_history(self, telegram_id: int, entry: dict) -> None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE users SET history = history || $1::jsonb WHERE telegram_id=$2",
+                json.dumps([entry]), telegram_id,
+            )
 
 
-def _generate_ticket_id(length: int = 5) -> str:
-    return "".join(secrets.choice(TICKET_ID_CHARS) for _ in range(length))
-
+# ── TicketStorage ─────────────────────────────────────────────────────────────
 
 class TicketStorage:
-    """Thread-safe storage for support tickets."""
+    async def create_ticket(self, user_id: int, username: str, message: str) -> str:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            while True:
+                tid = _gen_id()
+                exists = await conn.fetchval("SELECT 1 FROM tickets WHERE ticket_id=$1", tid)
+                if not exists:
+                    break
+            await conn.execute(
+                "INSERT INTO tickets (ticket_id, user_id, username, message) VALUES ($1,$2,$3,$4)",
+                tid, user_id, username, message,
+            )
+            return tid
 
-    def __init__(self, path: Path = TICKETS_FILE) -> None:
-        self._path = path
-        self._tickets: dict[str, dict] = {}   # ticket_id -> ticket data
-        self._lock = threading.RLock()
-        self._dirty = False
-        self._load()
-        
-        # Start background save loop
-        self._save_thread = threading.Thread(target=self._flush_loop, daemon=True)
-        self._save_thread.start()
+    async def get_open_tickets(self) -> list[dict]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM tickets WHERE status='open'")
+            return [dict(r) for r in rows]
 
-    def _flush_loop(self):
-        import time
-        while True:
-            time.sleep(5)
-            if self._dirty:
-                with self._lock:
-                    if self._dirty:
-                        self._perform_save()
-                        self._dirty = False
+    async def close_ticket(self, ticket_id: str) -> dict | None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE tickets SET status='closed' WHERE ticket_id=$1 RETURNING *", ticket_id
+            )
+            return dict(row) if row else None
 
-    def _load(self) -> None:
-        if not self._path.exists():
-            return
-        try:
-            content = self._path.read_text(encoding="utf-8").strip()
-            if content:
-                self._tickets = json.loads(content)
-        except Exception as e:
-            logger.error(f"Error loading tickets from {self._path}: {e}", exc_info=True)
-
-    def _save_unlocked(self) -> None:
-        self._dirty = True
-
-    def _perform_save(self) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self._tickets, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(self._path)
-        except Exception as e:
-            logger.error(f"Error saving tickets to {self._path}: {e}", exc_info=True)
-
-    def create_ticket(self, user_id: int, username: str, message: str) -> str:
-        with self._lock:
-            existing = {t["id"] for t in self._tickets.values()}
-            ticket_id = _generate_ticket_id()
-            while ticket_id in existing:
-                ticket_id = _generate_ticket_id()
-            self._tickets[ticket_id] = {
-                "id": ticket_id,
-                "user_id": user_id,
-                "username": username,
-                "message": message,
-                "status": "open",
-            }
-            self._save_unlocked()
-            return ticket_id
-
-    def get_open_tickets(self) -> list[dict]:
-        with self._lock:
-            return [t for t in self._tickets.values() if t.get("status") == "open"]
-
-    def close_ticket(self, ticket_id: str) -> dict | None:
-        with self._lock:
-            ticket = self._tickets.get(ticket_id)
-            if ticket:
-                ticket["status"] = "closed"
-                self._save_unlocked()
-            return ticket
-
-    def get_ticket(self, ticket_id: str) -> dict | None:
-        with self._lock:
-            return self._tickets.get(ticket_id)
+    async def get_ticket(self, ticket_id: str) -> dict | None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM tickets WHERE ticket_id=$1", ticket_id)
+            return dict(row) if row else None
 
 
-# ── Payment (Invoices) Storage ─────────────────────────────────────────────────
-
-PAYMENTS_FILE = DATA_DIR / "payments.json"
-
+# ── PaymentStorage ────────────────────────────────────────────────────────────
 
 class PaymentStorage:
-    """Thread-safe storage for payment invoices created via Xrocket.
+    async def create_payment(
+        self,
+        invoice_id: str,
+        user_id: int,
+        amount_requested: float,
+        unique_amount: float,
+        currency: str = "USDT",
+        payment_url: str | None = None,
+        metadata: dict | None = None,
+        created_at: float | None = None,
+    ) -> dict:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """INSERT INTO payments
+                   (invoice_id, user_id, amount_requested, unique_amount, currency,
+                    payment_url, metadata, created_at)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *""",
+                invoice_id, user_id, float(amount_requested), float(unique_amount),
+                currency, payment_url,
+                json.dumps(metadata) if metadata else None,
+                created_at or time.time(),
+            )
+            return dict(row)
 
-    Each payment record structure:
-    {
-        "invoice_id": str,
-        "user_id": int,
-        "amount_requested": float,
-        "unique_amount": float,
-        "currency": str,
-        "status": "pending" | "paid" | "cancelled",
-        "payment_url": str | None,
-        "created_at": float,
-        "paid_at": float | None,
-        "metadata": dict | None,
-        "processed": bool  # whether we already credited the user's balance
-    }
-    """
+    async def get_payment(self, invoice_id: str) -> dict | None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM payments WHERE invoice_id=$1", invoice_id)
+            return dict(row) if row else None
 
-    def __init__(self, path: Path = PAYMENTS_FILE) -> None:
-        self._path = path
-        self._payments: dict[str, dict] = {}  # invoice_id -> record
-        self._lock = threading.RLock()
-        self._dirty = False
-        self._load()
-        self._save_thread = threading.Thread(target=self._flush_loop, daemon=True)
-        self._save_thread.start()
-
-    def _flush_loop(self):
-        import time
-        while True:
-            time.sleep(5)
-            if self._dirty:
-                with self._lock:
-                    if self._dirty:
-                        self._perform_save()
-                        self._dirty = False
-
-    def _load(self) -> None:
-        if not self._path.exists():
-            return
-        try:
-            content = self._path.read_text(encoding="utf-8").strip()
-            if content:
-                self._payments = json.loads(content)
-        except Exception as e:
-            logger.error(f"Error loading payments from {self._path}: {e}", exc_info=True)
-
-    def _save_unlocked(self) -> None:
-        self._dirty = True
-
-    def _perform_save(self) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self._payments, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(self._path)
-        except Exception as e:
-            logger.error(f"Error saving payments: {e}", exc_info=True)
-
-    def create_payment(self, invoice_id: str, user_id: int, amount_requested: float, unique_amount: float, currency: str = "USD", payment_url: str | None = None, metadata: dict | None = None, created_at: float | None = None) -> dict:
-        import time
-        with self._lock:
-            rec = {
-                "invoice_id": invoice_id,
-                "user_id": user_id,
-                "amount_requested": float(amount_requested),
-                "unique_amount": float(unique_amount),
-                "currency": currency,
-                "status": "pending",
-                "payment_url": payment_url,
-                "created_at": created_at or time.time(),
-                "paid_at": None,
-                "metadata": metadata,
-                "processed": False,
-            }
-            self._payments[invoice_id] = rec
-            self._save_unlocked()
-            return rec
-
-    def get_payment(self, invoice_id: str) -> dict | None:
-        with self._lock:
-            return self._payments.get(invoice_id)
-
-    def mark_paid(self, invoice_id: str, paid_at: float | None = None, external_meta: dict | None = None) -> dict | None:
-        import time
-        with self._lock:
-            rec = self._payments.get(invoice_id)
-            if not rec:
-                return None
-            if rec.get("status") == "paid":
-                # Already marked paid; idempotent
-                return rec
-            rec["status"] = "paid"
-            rec["paid_at"] = paid_at or time.time()
-            if external_meta:
-                rec.setdefault("external_meta", {})
-                rec["external_meta"].update(external_meta)
-            self._save_unlocked()
-            return rec
-
-    def mark_processed(self, invoice_id: str) -> bool:
-        with self._lock:
-            rec = self._payments.get(invoice_id)
-            if not rec:
-                return False
-            if rec.get("processed"):
-                return False
-            rec["processed"] = True
-            self._save_unlocked()
-            return True
-
-    def acquire_for_crediting(
+    async def acquire_for_crediting(
         self,
         invoice_id: str,
         paid_at: float | None = None,
         external_meta: dict | None = None,
     ) -> dict | None:
-        """Atomically reserve invoice for crediting (prevents double credit)."""
-        import time
+        """Atomically mark invoice as processed. Returns record or None if already processed."""
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                row = await conn.fetchrow(
+                    "SELECT * FROM payments WHERE invoice_id=$1 FOR UPDATE", invoice_id
+                )
+                if not row or row["processed"]:
+                    return None
+                row = await conn.fetchrow(
+                    """UPDATE payments SET processed=TRUE, status='paid', paid_at=$1,
+                       external_meta=$2 WHERE invoice_id=$3 RETURNING *""",
+                    paid_at or time.time(),
+                    json.dumps(external_meta) if external_meta else None,
+                    invoice_id,
+                )
+                return dict(row)
 
-        with self._lock:
-            rec = self._payments.get(invoice_id)
-            if not rec or rec.get("processed"):
-                return None
-            rec["processed"] = True
-            rec["status"] = "paid"
-            rec["paid_at"] = paid_at or time.time()
-            if external_meta:
-                rec.setdefault("external_meta", {})
-                rec["external_meta"].update(external_meta)
-            self._save_unlocked()
-            return dict(rec)
+    async def release_crediting(self, invoice_id: str) -> None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE payments SET processed=FALSE, status='pending', paid_at=NULL WHERE invoice_id=$1",
+                invoice_id,
+            )
 
-    def release_crediting(self, invoice_id: str) -> None:
-        """Rollback credit reservation if balance update failed."""
-        with self._lock:
-            rec = self._payments.get(invoice_id)
-            if not rec:
-                return
-            rec["processed"] = False
-            rec["status"] = "pending"
-            rec["paid_at"] = None
-            self._save_unlocked()
+    async def get_pending_payments(self) -> list[dict]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM payments WHERE status='pending' AND processed=FALSE"
+            )
+            return [dict(r) for r in rows]
 
-    def get_pending_payments(self) -> list[dict]:
-        """Return payment records awaiting payment confirmation."""
-        with self._lock:
-            return [
-                p
-                for p in self._payments.values()
-                if p.get("status") == "pending" and not p.get("processed")
-            ]
-
-    def find_by_unique_amount(self, unique_amount: float, currency: str = "USDT") -> list[dict]:
-        with self._lock:
-            return [p for p in self._payments.values() if float(p.get("unique_amount")) == float(unique_amount) and p.get("currency") == currency]
+    async def find_by_unique_amount(self, unique_amount: float, currency: str = "USDT") -> list[dict]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT * FROM payments WHERE unique_amount=$1 AND currency=$2",
+                unique_amount, currency,
+            )
+            return [dict(r) for r in rows]
 
 
-# ── Withdraw Storage ──────────────────────────────────────────────────────────
-
-WITHDRAWALS_FILE = DATA_DIR / "withdrawals.json"
-WITHDRAW_MIN_AMOUNT = 30.0
-
+# ── WithdrawStorage ───────────────────────────────────────────────────────────
 
 class WithdrawStorage:
-    """Thread-safe storage for withdrawal requests."""
+    async def create_withdrawal(self, user_id: int, username: str, amount: float, address: str) -> str:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            while True:
+                wid = _gen_id()
+                exists = await conn.fetchval("SELECT 1 FROM withdrawals WHERE withdraw_id=$1", wid)
+                if not exists:
+                    break
+            await conn.execute(
+                "INSERT INTO withdrawals (withdraw_id, user_id, username, amount, address) VALUES ($1,$2,$3,$4,$5)",
+                wid, user_id, username, amount, address,
+            )
+            return wid
 
-    def __init__(self, path: Path = WITHDRAWALS_FILE) -> None:
-        self._path = path
-        self._withdrawals: dict[str, dict] = {}  # withdraw_id -> data
-        self._lock = threading.RLock()
-        self._dirty = False
-        self._load()
-        self._save_thread = threading.Thread(target=self._flush_loop, daemon=True)
-        self._save_thread.start()
+    async def get_pending_withdrawals(self) -> list[dict]:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch("SELECT * FROM withdrawals WHERE status='pending'")
+            return [dict(r) for r in rows]
 
-    def _flush_loop(self):
-        import time
-        while True:
-            time.sleep(5)
-            if self._dirty:
-                with self._lock:
-                    if self._dirty:
-                        self._perform_save()
-                        self._dirty = False
+    async def get_withdrawal(self, withdraw_id: str) -> dict | None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow("SELECT * FROM withdrawals WHERE withdraw_id=$1", withdraw_id)
+            return dict(row) if row else None
 
-    def _load(self) -> None:
-        if not self._path.exists():
-            return
-        try:
-            content = self._path.read_text(encoding="utf-8").strip()
-            if content:
-                self._withdrawals = json.loads(content)
-        except Exception as e:
-            logger.error(f"Error loading withdrawals from {self._path}: {e}", exc_info=True)
+    async def approve_withdrawal(self, withdraw_id: str) -> dict | None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE withdrawals SET status='approved' WHERE withdraw_id=$1 AND status='pending' RETURNING *",
+                withdraw_id,
+            )
+            return dict(row) if row else None
 
-    def _save_unlocked(self) -> None:
-        self._dirty = True
-
-    def _perform_save(self) -> None:
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = self._path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(self._withdrawals, ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp.replace(self._path)
-        except Exception as e:
-            logger.error(f"Error saving withdrawals: {e}", exc_info=True)
-
-    def create_withdrawal(self, user_id: int, username: str, amount: float, address: str) -> str:
-        with self._lock:
-            withdraw_id = _generate_ticket_id()
-            existing = set(self._withdrawals.keys())
-            while withdraw_id in existing:
-                withdraw_id = _generate_ticket_id()
-            self._withdrawals[withdraw_id] = {
-                "id": withdraw_id,
-                "user_id": user_id,
-                "username": username,
-                "amount": amount,
-                "address": address,
-                "status": "pending",   # pending | approved | rejected
-                "reject_reason": None,
-            }
-            self._save_unlocked()
-            return withdraw_id
-
-    def get_pending_withdrawals(self) -> list[dict]:
-        with self._lock:
-            return [w for w in self._withdrawals.values() if w.get("status") == "pending"]
-
-    def get_withdrawal(self, withdraw_id: str) -> dict | None:
-        with self._lock:
-            return self._withdrawals.get(withdraw_id)
-
-    def approve_withdrawal(self, withdraw_id: str) -> dict | None:
-        with self._lock:
-            w = self._withdrawals.get(withdraw_id)
-            if w and w["status"] == "pending":
-                w["status"] = "approved"
-                self._save_unlocked()
-            return w
-
-    def reject_withdrawal(self, withdraw_id: str, reason: str) -> dict | None:
-        with self._lock:
-            w = self._withdrawals.get(withdraw_id)
-            if w and w["status"] == "pending":
-                w["status"] = "rejected"
-                w["reject_reason"] = reason
-                self._save_unlocked()
-            return w
+    async def reject_withdrawal(self, withdraw_id: str, reason: str) -> dict | None:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "UPDATE withdrawals SET status='rejected', reject_reason=$1 WHERE withdraw_id=$2 AND status='pending' RETURNING *",
+                reason, withdraw_id,
+            )
+            return dict(row) if row else None

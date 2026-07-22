@@ -87,7 +87,7 @@ def _deposit_history_entry(invoice_id: str, amount: float, currency: str) -> dic
     }
 
 
-def try_complete_payment(
+async def try_complete_payment(
     payments: PaymentStorage,
     storage: UserStorage,
     invoice_id: str,
@@ -95,7 +95,7 @@ def try_complete_payment(
 ) -> dict | None:
     """Credit user balance once for invoice_id. Returns summary dict or None if skipped."""
     meta = external_meta if isinstance(external_meta, dict) else None
-    rec = payments.acquire_for_crediting(invoice_id, external_meta=meta)
+    rec = await payments.acquire_for_crediting(invoice_id, external_meta=meta)
     if not rec:
         return None
 
@@ -106,17 +106,16 @@ def try_complete_payment(
 
     try:
         if payment_type == "plus_subscription":
-            # Activate Quantum+ subscription for 30 days
             import datetime
             expiry = (datetime.datetime.now() + datetime.timedelta(days=30)).isoformat()
-            storage.update_user(
+            await storage.update_user(
                 user_id,
                 subscription_active=True,
                 subscription_expiry=expiry,
                 operations_limit=300,
             )
-            storage.append_deposit_history(user_id, _deposit_history_entry(invoice_id, amt, currency))
-            record = storage.get_or_create(user_id)
+            await storage.append_deposit_history(user_id, _deposit_history_entry(invoice_id, amt, currency))
+            record = await storage.get_or_create(user_id)
             return {
                 "user_id": user_id,
                 "amount": amt,
@@ -126,15 +125,14 @@ def try_complete_payment(
                 "type": "plus_subscription",
             }
         else:
-            # Regular deposit — apply commission
-            record_pre = storage.get_or_create(user_id)
+            record_pre = await storage.get_or_create(user_id)
             from bot.constants import DEPOSIT_COMMISSION, DEPOSIT_COMMISSION_PLUS
             commission = DEPOSIT_COMMISSION_PLUS if record_pre.subscription_active else DEPOSIT_COMMISSION
             credited = round(amt * (1 - commission), 4)
-            record, _referral = storage.process_deposit(user_id, credited)
-            storage.append_deposit_history(user_id, _deposit_history_entry(invoice_id, credited, currency))
+            record, _referral = await storage.process_deposit(user_id, credited)
+            await storage.append_deposit_history(user_id, _deposit_history_entry(invoice_id, credited, currency))
     except Exception:
-        payments.release_crediting(invoice_id)
+        await payments.release_crediting(invoice_id)
         raise
 
     return {

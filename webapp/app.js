@@ -174,7 +174,18 @@ function renderHistory(history) {
 }
 
 /* ── Deposit ─────────────────────────────────────────────────────── */
-function showDeposit() { openScreen('screen-deposit'); }
+function showDeposit() {
+    openScreen('screen-deposit');
+    // Update commission label from state
+    const me = state.me;
+    const comm = me?.deposit_commission || 0.07;
+    const pct = Math.round(comm * 100);
+    const credited = Math.round(100 * (1 - comm));
+    const lbl = document.getElementById('deposit-commission-label');
+    const ex  = document.getElementById('deposit-credited-example');
+    if (lbl) lbl.textContent = `${pct}%${me?.subscription_active ? ' (Quantum+)' : ''}`;
+    if (ex)  ex.textContent  = `${credited} USDT`;
+}
 
 async function submitDeposit() {
     const amountStr = document.getElementById('deposit-input-amount').value.trim();

@@ -140,7 +140,7 @@ async def show_bundles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = update.effective_user
     if user is None:
         return
-    record = _storage(context).get_or_create(user.id)
+    record = await _storage(context).get_or_create(user.id)
     text = texts.BUNDLES.format(
         done=record.operations_done,
         limit=record.operations_limit or OPERATIONS_LIMIT,
@@ -186,11 +186,11 @@ async def _finish_bundle_task(application, duration: int, user_id: int, bundle_i
     await asyncio.sleep(duration)
     
     storage = application.bot_data["storage"]
-    completed = storage.complete_bundle(user_id, bundle_id, profit)
+    completed = await storage.complete_bundle(user_id, bundle_id, profit)
     
     if completed:
         try:
-            record = storage.get_or_create(user_id)
+            record = await storage.get_or_create(user_id)
             from telegram import InlineKeyboardButton, InlineKeyboardMarkup
             from bot.constants import CB_MAIN
             
@@ -244,7 +244,7 @@ async def bundle_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
             return BUNDLE_AMOUNT
             
         storage = _storage(context)
-        record = storage.get_or_create(user.id)
+        record = await storage.get_or_create(user.id)
         
         # Check balance
         if record.balance < amount:
@@ -286,8 +286,8 @@ async def bundle_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
         }
         
         # Deduct balance and add to active
-        storage.update_user(user.id, balance=record.balance - amount)
-        storage.add_active_bundle(user.id, bundle_data)
+        await storage.update_user(user.id, balance=record.balance - amount)
+        await storage.add_active_bundle(user.id, bundle_data)
         
         # Schedule task
         import asyncio
@@ -364,7 +364,7 @@ async def show_active_bundles(update: Update, context: ContextTypes.DEFAULT_TYPE
     query = update.callback_query
     if edit and query is None:
         return
-    record = _storage(context).get_or_create(user.id)
+    record = await _storage(context).get_or_create(user.id)
     active = record.active_bundles
 
     if not active:
@@ -397,7 +397,7 @@ async def show_history(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     query = update.callback_query
     if query is None:
         return
-    record = _storage(context).get_or_create(user.id)
+    record = await _storage(context).get_or_create(user.id)
     history = record.history
 
     if not history:
@@ -433,7 +433,7 @@ async def show_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user = update.effective_user
     if user is None:
         return
-    record = _storage(context).get_or_create(user.id)
+    record = await _storage(context).get_or_create(user.id)
     text = texts.WALLET.format(
         user_line=_format_user_line(user),
         system_id=record.system_id,
@@ -451,7 +451,7 @@ async def show_deposit_awaiting(update: Update, context: ContextTypes.DEFAULT_TY
     if query is None:
         return DEPOSIT_AMOUNT
     user = update.effective_user
-    record = _storage(context).get_or_create(user.id) if user else None
+    record = await _storage(context).get_or_create(user.id) if user else None
     commission = DEPOSIT_COMMISSION_PLUS if (record and record.subscription_active) else DEPOSIT_COMMISSION
     commission_pct = int(commission * 100)
     text = (
@@ -505,7 +505,7 @@ async def deposit_amount_handler(update: Update, context: ContextTypes.DEFAULT_T
 
             payments = context.application.bot_data.get("payments")
             storage = _storage(context)
-            user_rec = storage.get_or_create(user.id)
+            user_rec = await storage.get_or_create(user.id)
             payload_meta = _json.dumps(
                 {"user_id": user.id, "system_id": user_rec.system_id, "amount_requested": amount},
                 ensure_ascii=False,
@@ -525,7 +525,7 @@ async def deposit_amount_handler(update: Update, context: ContextTypes.DEFAULT_T
 
             metadata = {"user_id": user.id, "system_id": user_rec.system_id, "amount_requested": amount}
             if payments:
-                payments.create_payment(
+                await payments.create_payment(
                     invoice_id=invoice_id,
                     user_id=user.id,
                     amount_requested=amount,
@@ -592,8 +592,8 @@ async def show_referrals(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if user is None:
         return
     storage = _storage(context)
-    record = storage.get_or_create(user.id)
-    referral_link = storage.get_referral_link(user.id)
+    record = await storage.get_or_create(user.id)
+    referral_link = await storage.get_referral_link(user.id)
 
     text = texts.REFERRALS.format(
         referral_link=referral_link,
@@ -611,7 +611,7 @@ async def show_plus(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user is None:
         return
-    record = _storage(context).get_or_create(user.id)
+    record = await _storage(context).get_or_create(user.id)
 
     if record.subscription_active:
         # Calculate remaining days/hours if expiry is set
@@ -675,7 +675,7 @@ async def plus_confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         import json as _json
 
         storage = _storage(context)
-        user_rec = storage.get_or_create(user.id)
+        user_rec = await storage.get_or_create(user.id)
         payments = context.application.bot_data.get("payments")
 
         import os
@@ -698,7 +698,7 @@ async def plus_confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             raise RuntimeError("No invoice id")
 
         if payments:
-            payments.create_payment(
+            await payments.create_payment(
                 invoice_id=invoice_id,
                 user_id=user.id,
                 amount_requested=PLUS_SUBSCRIPTION_PRICE,
@@ -780,7 +780,7 @@ async def support_write_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     if query is None: return ConversationHandler.END
     
     storage: UserStorage = context.application.bot_data["storage"]
-    record = storage.get_or_create(update.effective_user.id)
+    record = await storage.get_or_create(update.effective_user.id)
     
     now = time.time()
     if now - record.last_support_time < 300:
@@ -797,14 +797,14 @@ async def support_message_handler(update: Update, context: ContextTypes.DEFAULT_
     user = update.effective_user
     
     now = time.time()
-    storage.update_support_time(user.id, now)
+    await storage.update_support_time(user.id, now)
     
     # Create ticket with unique ID
     username = _format_user_line(user)
-    ticket_id = ticket_store.create_ticket(user.id, username, update.message.text)
+    ticket_id = await ticket_store.create_ticket(user.id, username, update.message.text)
     
     # Notify admins
-    admins = storage.get_all_admins()
+    admins = await storage.get_all_admins()
     escaped_text = html.escape(update.message.text)
     msg = (
         f"📩 <b>Новое обращение #{ticket_id}</b>\n"
@@ -839,14 +839,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     logger.info(f"✓ start_command called for user {user.id}")
     storage = _storage(context)
-    storage.get_or_create(user.id)
+    await storage.get_or_create(user.id)
 
     if context.args:
         arg = context.args[0]
         if arg.startswith("ref_"):
             referrer_system_id = arg.removeprefix("ref_").strip()
             if referrer_system_id:
-                storage.register_referral(user.id, referrer_system_id)
+                await storage.register_referral(user.id, referrer_system_id)
 
     await show_main_menu(update, context, edit=False)
 
@@ -891,7 +891,7 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     user = update.effective_user
     if user:
         storage = _storage(context)
-        record = storage.get_or_create(user.id)
+        record = await storage.get_or_create(user.id)
         if record.is_banned:
             await query.answer("🚫 Вы заблокированы.", show_alert=True)
             return
@@ -995,7 +995,7 @@ async def withdraw_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return ConversationHandler.END
 
     storage = _storage(context)
-    record = storage.get_or_create(user.id)
+    record = await storage.get_or_create(user.id)
 
     from bot.storage import WITHDRAW_MIN_AMOUNT
 
@@ -1036,7 +1036,7 @@ async def withdraw_amount_handler(update: Update, context: ContextTypes.DEFAULT_
         return WITHDRAW_AMOUNT
 
     storage = _storage(context)
-    record = storage.get_or_create(user.id)
+    record = await storage.get_or_create(user.id)
 
     from bot.storage import WITHDRAW_MIN_AMOUNT
 
@@ -1082,7 +1082,7 @@ async def withdraw_address_handler(update: Update, context: ContextTypes.DEFAULT
         return ConversationHandler.END
 
     storage = _storage(context)
-    record = storage.get_or_create(user.id)
+    record = await storage.get_or_create(user.id)
 
     if amount > record.balance:
         await update.message.reply_text("❌ Ошибка: недостаточно средств.")
@@ -1090,11 +1090,11 @@ async def withdraw_address_handler(update: Update, context: ContextTypes.DEFAULT
 
     net_amount = round(amount * (1 - WITHDRAW_COMMISSION), 4)
     # Deduct full amount from balance immediately
-    storage.update_user(user.id, balance=record.balance - amount)
+    await storage.update_user(user.id, balance=record.balance - amount)
 
     withdrawals = context.application.bot_data["withdrawals"]
     uname = user.username or user.first_name or str(user.id)
-    withdraw_id = withdrawals.create_withdrawal(
+    withdraw_id = await withdrawals.create_withdrawal(
         user_id=user.id,
         username=uname,
         amount=net_amount,
@@ -1114,7 +1114,7 @@ async def withdraw_address_handler(update: Update, context: ContextTypes.DEFAULT
     )
 
     # Notify admins
-    admins = storage.get_all_admins()
+    admins = await storage.get_all_admins()
     for admin_id in admins:
         try:
             await context.bot.send_message(

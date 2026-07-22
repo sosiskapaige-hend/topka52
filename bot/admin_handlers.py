@@ -36,7 +36,8 @@ async def _is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     user = update.effective_user
     if not user:
         return False
-    return _storage(context).get_or_create(user.id).is_admin
+    record = await _storage(context).get_or_create(user.id)
+    return record.is_admin
 
 
 # ── Admin panel ───────────────────────────────────────────────────────────────
@@ -49,9 +50,9 @@ async def show_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     try:
-        tickets = _tickets(context).get_open_tickets()
+        tickets = await _tickets(context).get_open_tickets()
         # Withdrawals storage method is get_pending_withdrawals()
-        withdraws = _withdrawals(context).get_pending_withdrawals()
+        withdraws = await _withdrawals(context).get_pending_withdrawals()
 
         if not tickets and not withdraws:
             text = "📋 <b>Панель администратора</b>\n\nОбращений нет 🎉\nЗаявок на вывод нет 🎉"
@@ -97,7 +98,7 @@ async def admin_panel_ticket_view(update: Update, context: ContextTypes.DEFAULT_
         return ConversationHandler.END
 
     ticket_id = query.data.removeprefix(CB_ADMIN_REPLY_PREFIX)
-    ticket = _tickets(context).get_ticket(ticket_id)
+    ticket = await _tickets(context).get_ticket(ticket_id)
 
     if not ticket or ticket.get("status") != "open":
         await query.answer("Заявка уже закрыта или не найдена.", show_alert=True)
@@ -134,7 +135,7 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     reply_text = update.message.text
 
     # Close the ticket
-    _tickets(context).close_ticket(ticket_id)
+    await _tickets(context).close_ticket(ticket_id)
 
     # Send beautiful notification to user
     escaped_reply = html.escape(reply_text)
@@ -166,7 +167,7 @@ async def admin_send_reply(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     )
 
     # Refresh the panel
-    open_tickets = _tickets(context).get_open_tickets()
+    open_tickets = await _tickets(context).get_open_tickets()
     if not open_tickets:
         panel_text = "📋 <b>Панель администратора</b>\n\nОбращений нет 🎉"
         await update.message.reply_text(panel_text, parse_mode="HTML")
@@ -208,7 +209,7 @@ async def cmd_giveadmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     except ValueError:
         await update.message.reply_text("Неверный ID")
         return
-    if _storage(context).set_admin(target_id, True):
+    if await _storage(context).set_admin(target_id, True):
         await update.message.reply_text(f"✅ Пользователь {target_id} назначен администратором.")
     else:
         await update.message.reply_text("❌ Пользователь не найден.")
@@ -228,7 +229,7 @@ async def cmd_deleteadmin(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if target_id == 5710686998:
         await update.message.reply_text("⛔ Нельзя забрать права у главного администратора.")
         return
-    if _storage(context).set_admin(target_id, False):
+    if await _storage(context).set_admin(target_id, False):
         await update.message.reply_text(f"✅ Пользователь {target_id} лишён прав администратора.")
     else:
         await update.message.reply_text("❌ Пользователь не найден.")
@@ -247,8 +248,8 @@ async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Неверные параметры.")
         return
     storage = _storage(context)
-    record = storage.get_or_create(target_id)
-    storage.update_user(target_id, balance=record.balance + amount)
+    record = await storage.get_or_create(target_id)
+    await storage.update_user(target_id, balance=record.balance + amount)
     await update.message.reply_text(f"✅ Баланс пользователя {target_id} пополнен на {amount:.2f}$.")
 
 
@@ -265,8 +266,8 @@ async def cmd_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("Неверные параметры.")
         return
     storage = _storage(context)
-    record = storage.get_or_create(target_id)
-    storage.update_user(target_id, balance=max(0.0, record.balance - amount))
+    record = await storage.get_or_create(target_id)
+    await storage.update_user(target_id, balance=max(0.0, record.balance - amount))
     await update.message.reply_text(f"✅ У пользователя {target_id} списано {amount:.2f}$.")
 
 
@@ -282,9 +283,9 @@ async def cmd_ban(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Неверный ID")
         return
     storage = _storage(context)
-    record = storage.get_or_create(target_id)
+    record = await storage.get_or_create(target_id)
     new_banned = not record.is_banned
-    storage.set_banned(target_id, new_banned)
+    await storage.set_banned(target_id, new_banned)
     status = "🔒 заблокирован" if new_banned else "🔓 разблокирован"
     await update.message.reply_text(f"Пользователь {target_id} {status}.")
 
@@ -302,10 +303,10 @@ async def cmd_sub(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     import datetime
     storage = _storage(context)
-    record = storage.get_or_create(target_id)
+    record = await storage.get_or_create(target_id)
     new_sub = not record.subscription_active
     expiry = (datetime.datetime.now() + datetime.timedelta(days=30)).isoformat() if new_sub else None
-    storage.update_user(target_id, subscription_active=new_sub, subscription_expiry=expiry)
+    await storage.update_user(target_id, subscription_active=new_sub, subscription_expiry=expiry)
     status = "⭐ получил подписку Quantum+ (30 дней)" if new_sub else "лишился подписки Quantum+"
     await update.message.reply_text(f"✅ Пользователь {target_id} {status}.")
 
@@ -317,7 +318,7 @@ async def cmd_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Использование: /send ТЕКСТ")
         return
     message = " ".join(context.args)
-    users = _storage(context).get_all_users()
+    users = await _storage(context).get_all_users()
     count = 0
     await update.message.reply_text(f"📡 Начинаю рассылку для {len(users)} пользователей...")
     for uid in users:
@@ -338,7 +339,7 @@ async def show_withdraw_panel(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("⛔ Нет доступа.")
         return
 
-    pending = _withdrawals(context).get_pending_withdrawals()
+    pending = await _withdrawals(context).get_pending_withdrawals()
 
     if not pending:
         text = "💸 <b>Заявки на вывод</b>\n\nПендинг-заявок нет 🎉"
@@ -379,7 +380,7 @@ async def admin_withdraw_view(update: Update, context: ContextTypes.DEFAULT_TYPE
             pass
         return
 
-    w = _withdrawals(context).get_withdrawal(withdraw_id)
+    w = await _withdrawals(context).get_withdrawal(withdraw_id)
 
     if not w or w["status"] != "pending":
         await query.answer("Заявка уже обработана или не найдена.", show_alert=True)
@@ -414,7 +415,7 @@ async def admin_withdraw_approve(update: Update, context: ContextTypes.DEFAULT_T
         return
 
     withdraw_id = query.data.removeprefix(CB_ADMIN_WITHDRAW_APPROVE)
-    w = _withdrawals(context).approve_withdrawal(withdraw_id)
+    w = await _withdrawals(context).approve_withdrawal(withdraw_id)
 
     if not w:
         await query.answer("Заявка уже обработана.", show_alert=True)
@@ -422,9 +423,9 @@ async def admin_withdraw_approve(update: Update, context: ContextTypes.DEFAULT_T
 
     # Deduct balance from user
     storage = _storage(context)
-    record = storage.get_or_create(w["user_id"])
+    record = await storage.get_or_create(w["user_id"])
     new_balance = max(0.0, record.balance - w["amount"])
-    storage.update_user(w["user_id"], balance=new_balance)
+    await storage.update_user(w["user_id"], balance=new_balance)
 
     # Notify user
     try:
@@ -475,7 +476,7 @@ async def admin_withdraw_reject_reason(update: Update, context: ContextTypes.DEF
         return ConversationHandler.END
 
     reason = update.message.text.strip()
-    w = _withdrawals(context).reject_withdrawal(withdraw_id, reason)
+    w = await _withdrawals(context).reject_withdrawal(withdraw_id, reason)
 
     if not w:
         await update.message.reply_text("⚠️ Заявка не найдена или уже обработана.")
