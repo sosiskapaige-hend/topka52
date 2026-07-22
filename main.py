@@ -321,6 +321,11 @@ def _build_application(webapp_url: str | None, bot_name: str) -> Application:
         from crm_writer import crm
         if crm:
             try:
+                has_msg = bool(upd.message)
+                has_cb = bool(upd.callback_query)
+                logger.info("crm_process: update_id=%s has_message=%s has_callback=%s from=%s",
+                    upd.update_id, has_msg, has_cb,
+                    upd.effective_user.id if upd.effective_user else None)
                 await crm.save_update(upd)
             except Exception as exc:
                 logger.error("crm_writer: %s", exc, exc_info=True)
