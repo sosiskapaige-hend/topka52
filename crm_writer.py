@@ -273,10 +273,13 @@ class CRMWriter:
 
         forward_from_id = None
         forward_from_name = None
-        if msg.forward_from:
-            forward_from_id = msg.forward_from.id
-            name_parts = filter(None, [msg.forward_from.first_name, msg.forward_from.last_name])
-            forward_from_name = " ".join(name_parts) or None
+        if getattr(msg, 'forward_origin', None):
+            origin = msg.forward_origin
+            user = getattr(origin, 'sender_user', None)
+            if user:
+                forward_from_id = user.id
+                name_parts = filter(None, [user.first_name, user.last_name])
+                forward_from_name = " ".join(name_parts) or None
 
         db_msg = Message(
             user_id=user.id,
