@@ -257,7 +257,8 @@ class UserStorage:
         pool = await get_pool()
         async with pool.acquire() as conn:
             row = await conn.fetchrow(
-                """UPDATE users SET balance=balance+$1, total_deposited=total_deposited+$1
+                """UPDATE users SET balance=balance+$1, total_deposited=total_deposited+$1,
+                   operations_done=0
                    WHERE telegram_id=$2 RETURNING *""",
                 amount, telegram_id,
             )
@@ -451,3 +452,4 @@ class WithdrawStorage:
                 reason, withdraw_id,
             )
             return dict(row) if row else None
+
