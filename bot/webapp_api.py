@@ -179,42 +179,67 @@ async def xrocket_webhook_alt(request: Request, x_sig: str | None = Depends(_xro
 # ── Payment poller (startup) ──────────────────────────────────────────────────
 
 @app.on_event("startup")
-async def _restore_pending_bundles():
-    """Re-schedule finish tasks for bundles that survived a restart."""
-    import main as _main
+async def _start_bundle_completer():
+    """Background loop that completes expired bundles every 30s."""
+    async def _loop():
+        import json as _json
+        import main as _main
+        from bot.handlers import _finish_bundle_task
+        from bot.db import get_pool
 
-    async def _wait_and_finish():
-        # Wait for ptb_app to be ready
-        for _ in range(30):
-            if getattr(_main, "ptb_app", None):
+        # Wait until storage and ptb_app are ready
+        for _ in range(60):
+            if _storage and getattr(_main, "ptb_app", None):
                 break
             await asyncio.sleep(1)
 
-        storage = _storage
-        if not storage:
-            return
-
-        from bot.handlers import _finish_bundle_task
-        now = time.time()
-        try:
-            pool = await __import__("bot.db", fromlist=["get_pool"]).get_pool()
-            async with pool.acquire() as conn:
-                rows = await conn.fetch("SELECT telegram_id, active_bundles FROM users WHERE active_bundles != '[]'")
-            for row in rows:
-                uid = row["telegram_id"]
-                bundles = row["active_bundles"] if isinstance(row["active_bundles"], list) else __import__("json").loads(row["active_bundles"])
-                for b in bundles:
-                    start = b.get("start_time", now)
-                    duration = b.get("duration", 60)
-                    remaining = max(0, int(start + duration - now))
-                    asyncio.create_task(
-                        _finish_bundle_task(_main.ptb_app, remaining, uid, b["id"], b.get("profit", 0))
+        logger.info("Bundle completer started")
+        while True:
+            try:
+                now = time.time()
+                pool = await get_pool()
+                async with pool.acquire() as conn:
+                    rows = await conn.fetch(
+                        "SELECT telegram_id, active_bundles FROM users WHERE active_bundles != '[]'::jsonb"
                     )
-                    logger.info("Restored bundle %s for user %s, finishes in %ds", b["id"], uid, remaining)
-        except Exception as e:
-            logger.error("Failed to restore pending bundles: %s", e)
+                for row in rows:
+                    uid = row["telegram_id"]
+                    bundles = row["active_bundles"] if isinstance(row["active_bundles"], list) else _json.loads(row["active_bundles"])
+                    for b in bundles:
+                        start = b.get("start_time", now)
+                        duration = b.get("duration", 60)
+                        if now >= start + duration:
+                            profit = b.get("profit", 0)
+                            logger.info("Completing expired bundle %s for user %s", b["id"], uid)
+                            completed = await _storage.complete_bundle(uid, b["id"], profit)
+                            if completed and getattr(_main, "ptb_app", None):
+                                try:
+                                    from bot import texts
+                                    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+                                    from bot.constants import CB_MAIN
+                                    record = await _storage.get_or_create(uid)
+                                    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data=CB_MAIN)]])
+                                    await _main.ptb_app.bot.send_message(
+                                        chat_id=uid,
+                                        text=texts.HISTORY_FINISH_NOTIFICATION.format(
+                                            coin=completed["coin"],
+                                            ex1=completed["ex1"],
+                                            ex2=completed["ex2"],
+                                            amount=completed["amount"],
+                                            exit_amount=completed["amount"] + profit,
+                                            profit=profit,
+                                            spread=completed["spread_str"],
+                                            balance=record.balance,
+                                        ),
+                                        reply_markup=keyboard,
+                                    )
+                                except Exception as e:
+                                    logger.error("Failed to notify user %s about bundle completion: %s", uid, e)
+            except Exception as e:
+                logger.error("Bundle completer error: %s", e)
+            await asyncio.sleep(30)
 
-    asyncio.create_task(_wait_and_finish())
+    asyncio.create_task(_loop())
 
 
 @app.on_event("startup")
@@ -381,11 +406,6 @@ async def launch_bundle(
 
     await storage.update_user(uid, balance=record.balance - req.amount)
     await storage.add_active_bundle(uid, bundle_data)
-
-    import main
-    if hasattr(main, "ptb_app"):
-        from bot.handlers import _finish_bundle_task
-        asyncio.create_task(_finish_bundle_task(main.ptb_app, duration, uid, bundle_id, profit))
 
     return {"status": "success"}
 

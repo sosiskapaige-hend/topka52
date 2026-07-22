@@ -285,15 +285,7 @@ async def bundle_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
         await storage.update_user(user.id, balance=record.balance - amount)
         await storage.add_active_bundle(user.id, bundle_data)
         
-        # Schedule task
-        import asyncio
-        asyncio.create_task(_finish_bundle_task(
-            context.application, duration, user.id, bundle_id, profit
-        ))
-        
-        # Show success screen (active bundles)
         await show_active_bundles(update, context, edit=False)
-        return ConversationHandler.END
         return ConversationHandler.END
 
     except ValueError:
