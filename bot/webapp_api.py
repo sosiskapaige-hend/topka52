@@ -1,18 +1,23 @@
+import asyncio
 import hashlib
 import hmac
+import html
 import json
 import logging
+import math
 import os
+import random
 import time
 import urllib.parse
+import uuid
 from collections import defaultdict
-import asyncio
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Header, Request, Depends
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from bot.storage import UserStorage, TicketStorage, WithdrawStorage
 
@@ -101,7 +106,12 @@ def _get_ptb_app():
 
 # ── App ───────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="Quantum WebApp API")
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    asyncio.create_task(_bundle_completer_loop())
+    yield
+
+app = FastAPI(title="Quantum WebApp API", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -172,87 +182,79 @@ async def xrocket_webhook_alt(request: Request, x_sig: str | None = Depends(_xro
         raise HTTPException(status_code=400, detail="Invalid JSON")
     return JSONResponse(await _process_xrocket_payload(payload, body, x_sig))
 
-# ── Payment poller (startup) ──────────────────────────────────────────────────
-
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def _lifespan(app: FastAPI):
-    asyncio.create_task(_bundle_completer_loop())
-    yield
+# ── Bundle completer loop ─────────────────────────────────────────────────────
 
 async def _bundle_completer_loop():
-        import json as _json
-        from bot.db import get_pool
+    import json as _json
+    from bot.db import get_pool
 
-        logger.info("Bundle completer: waiting for storage and ptb_app...")
-        for _ in range(60):
-            if _storage and _get_ptb_app():
-                break
-            await asyncio.sleep(1)
+    logger.info("Bundle completer: waiting for storage and ptb_app...")
+    for _ in range(60):
+        if _storage and _get_ptb_app():
+            break
+        await asyncio.sleep(1)
 
-        if not _storage:
-            logger.error("Bundle completer: _storage is None, aborting")
-            return
-        if not _get_ptb_app():
-            logger.error("Bundle completer: ptb_app is None, aborting")
-            return
+    if not _storage:
+        logger.error("Bundle completer: _storage is None, aborting")
+        return
+    if not _get_ptb_app():
+        logger.error("Bundle completer: ptb_app is None, aborting")
+        return
 
-        logger.info("Bundle completer started")
-        while True:
-            try:
-                now = time.time()
-                pool = await get_pool()
-                async with pool.acquire() as conn:
-                    rows = await conn.fetch(
-                        "SELECT telegram_id, active_bundles FROM users WHERE active_bundles != '[]'::jsonb"
-                    )
-                for row in rows:
-                    uid = row["telegram_id"]
-                    bundles = row["active_bundles"] if isinstance(row["active_bundles"], list) else _json.loads(row["active_bundles"])
-                    for b in bundles:
-                        start = b.get("start_time", now)
-                        duration = b.get("duration", 60)
-                        if now >= start + duration:
-                            profit = b.get("profit", 0)
-                            bundle_id = b["id"]
-                            logger.info("Completing bundle %s user %s profit %.4f", bundle_id, uid, profit)
-                            completed = await _storage.complete_bundle(uid, bundle_id, profit)
-                            if not completed:
-                                logger.warning("complete_bundle returned None for bundle %s user %s", bundle_id, uid)
-                                continue
-                            ptb = _get_ptb_app()
-                            if not ptb:
-                                logger.warning("ptb_app is None, cannot notify user %s", uid)
-                                continue
-                            try:
-                                from bot import texts
-                                from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-                                from bot.constants import CB_MAIN
-                                record = await _storage.get_or_create(uid)
-                                keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data=CB_MAIN)]])
-                                await ptb.bot.send_message(
-                                    chat_id=uid,
-                                    text=texts.HISTORY_FINISH_NOTIFICATION.format(
-                                        coin=completed["coin"],
-                                        ex1=completed.get("ex1", ""),
-                                        ex2=completed.get("ex2", ""),
-                                        amount=completed["amount"],
-                                        exit_amount=completed["amount"] + profit,
-                                        profit=profit,
-                                        spread=completed.get("spread_str", ""),
-                                        balance=record.balance,
-                                    ),
-                                    reply_markup=keyboard,
-                                )
-                                logger.info("Notified user %s about bundle %s", uid, bundle_id)
-                            except Exception as e:
-                                logger.error("Failed to notify user %s bundle %s: %s", uid, bundle_id, e, exc_info=True)
-            except Exception as e:
-                logger.error("Bundle completer error: %s", e, exc_info=True)
-            await asyncio.sleep(30)
+    from bot import texts
+    from bot.constants import CB_MAIN
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Payment poller runs in main.py only — removed duplicate here
+    logger.info("Bundle completer started")
+    while True:
+        try:
+            now = time.time()
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(
+                    "SELECT telegram_id, active_bundles FROM users WHERE active_bundles != '[]'::jsonb"
+                )
+            for row in rows:
+                uid = row["telegram_id"]
+                bundles = row["active_bundles"] if isinstance(row["active_bundles"], list) else _json.loads(row["active_bundles"])
+                for b in bundles:
+                    start = b.get("start_time", now)
+                    duration = b.get("duration", 60)
+                    if now >= start + duration:
+                        profit = b.get("profit", 0)
+                        bundle_id = b["id"]
+                        logger.info("Completing bundle %s user %s profit %.4f", bundle_id, uid, profit)
+                        completed = await _storage.complete_bundle(uid, bundle_id, profit)
+                        if not completed:
+                            logger.warning("complete_bundle returned None for bundle %s user %s", bundle_id, uid)
+                            continue
+                        ptb = _get_ptb_app()
+                        if not ptb:
+                            logger.warning("ptb_app is None, cannot notify user %s", uid)
+                            continue
+                        try:
+                            record = await _storage.get_or_create(uid)
+                            keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data=CB_MAIN)]])
+                            await ptb.bot.send_message(
+                                chat_id=uid,
+                                text=texts.HISTORY_FINISH_NOTIFICATION.format(
+                                    coin=completed["coin"],
+                                    ex1=completed.get("ex1", ""),
+                                    ex2=completed.get("ex2", ""),
+                                    amount=completed["amount"],
+                                    exit_amount=completed["amount"] + profit,
+                                    profit=profit,
+                                    spread=completed.get("spread_str", ""),
+                                    balance=record.balance,
+                                ),
+                                reply_markup=keyboard,
+                            )
+                            logger.info("Notified user %s about bundle %s", uid, bundle_id)
+                        except Exception as e:
+                            logger.error("Failed to notify user %s bundle %s: %s", uid, bundle_id, e, exc_info=True)
+        except Exception as e:
+            logger.error("Bundle completer error: %s", e, exc_info=True)
+        await asyncio.sleep(30)
 
 # ── API endpoints ─────────────────────────────────────────────────────────────
 
@@ -342,7 +344,6 @@ async def launch_bundle(
     record = await storage.get_or_create(uid)
 
     from bot.constants import BUNDLE_CONFIG, PLUS_OPERATIONS_LIMIT, OPERATIONS_LIMIT
-    import math, random, uuid
 
     if req.coin not in BUNDLE_CONFIG:
         raise HTTPException(status_code=400, detail="Invalid coin")
@@ -430,7 +431,6 @@ async def send_support(
     now = time.time()
     await storage.update_support_time(uid, now)
 
-    import html
     name = user.get("first_name", "")
     if user.get("last_name"):
         name += f" {user['last_name']}"
@@ -602,7 +602,6 @@ async def request_withdraw(
 
     net_amount = round(req.amount * (1 - WITHDRAW_COMMISSION), 4)
     await storage.update_user(uid, balance=record.balance - req.amount)
-    # Record withdrawal in transaction history
     await storage.append_deposit_history(uid, {
         "type": "withdrawal",
         "amount": req.amount,
@@ -610,7 +609,6 @@ async def request_withdraw(
         "time": time.time(),
     })
 
-    import html
     name = user.get("first_name", "")
     if user.get("last_name"):
         name += f" {user['last_name']}"

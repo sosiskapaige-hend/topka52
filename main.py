@@ -108,17 +108,17 @@ def _start_self_ping(port: int) -> None:
     url = os.getenv("RENDER_EXTERNAL_URL", f"http://localhost:{port}") + "/health"
 
     async def _ping_loop() -> None:
-        await asyncio.sleep(10)  # wait for uvicorn to start
+        await asyncio.sleep(10)
         logger.info("Self-ping started → %s", url)
         while True:
             try:
                 import urllib.request
                 urllib.request.urlopen(url, timeout=10)  # noqa: S310
             except Exception:
-                pass  # ignore errors — server may still be starting
+                pass
             await asyncio.sleep(50)
 
-    asyncio.get_event_loop().create_task(_ping_loop())
+    asyncio.ensure_future(_ping_loop())
 
 
 
@@ -335,7 +335,7 @@ async def _main_async() -> None:
         logger.warning("WEBAPP_URL is not HTTPS — Telegram WebApp button will not work")
 
     # Initialize PostgreSQL pool (Neon)
-    from bot.db import init_pool, close_pool
+    from bot.db import init_pool
     await init_pool()
     logger.info("PostgreSQL pool initialized")
 
@@ -367,11 +367,14 @@ async def _main_async() -> None:
 
     logger.info("Starting on port %d | webapp_url=%s", port, webapp_url)
 
-    # Run bot + web server concurrently
-    await asyncio.gather(
-        _run_bot(application),
-        _run_web(port),
-    )
+    try:
+        await asyncio.gather(
+            _run_bot(application),
+            _run_web(port),
+        )
+    finally:
+        from bot.db import close_pool
+        await close_pool()
 
 
 def main() -> None:

@@ -107,14 +107,10 @@ SUPPORT = "🆘 Поддержка"
 WITHDRAW = "📤 Вывести"
 TX_HISTORY = "📄 История транзакций"
 
-COIN_PLACEHOLDER = "{coin}"
-
 BUNDLE_LAUNCH = """🔗 {coin} | {ex1} → {ex2} • Спред: {spread}
 
 💵 Введите сумму входа (USDT)
 Минимум: {min_usdt} USDT | Максимум: {max_usdt} USDT"""
-
-BUNDLE_LAUNCH_SUCCESS = """""" # Not used, we'll route to active bundles directly
 
 ACTIVE_BUNDLES_HEADER = "⚡️ Активные связки ({count}/50)"
 

@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-import logging
 import html
+import logging
+import math
+import os
+import random
+import time
+import uuid
+
+import datetime
 
 from telegram import Update, User, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest
@@ -9,14 +16,10 @@ from telegram.ext import ContextTypes, ConversationHandler
 
 logger = logging.getLogger(__name__)
 
-import uuid
-import random
-import time
-import string
-
 from bot.constants import (
+    CB_ABOUT,
     CB_ACTIVE_BUNDLES,
-    CB_QUANTUM_PLUS,
+    CB_ADMIN_PANEL,
     CB_BUNDLES,
     CB_COIN_PREFIX,
     CB_DEPOSIT,
@@ -27,35 +30,34 @@ from bot.constants import (
     CB_OPEN_APP,
     CB_PLUS_ABOUT,
     CB_PLUS_BUY,
+    CB_QUANTUM_PLUS,
     CB_REFERRALS,
     CB_SELECT_BUNDLE,
     CB_SUPPORT,
     CB_SUPPORT_WRITE,
-    CB_TX_HISTORY,
-    CB_WALLET,
-    CB_WITHDRAW,
-    CB_TUTORIAL_1,
-    CB_TUTORIAL_2,
-    CB_TUTORIAL_3,
-    CB_TUTORIAL_4,
-    CB_ABOUT,
     CB_TOS_1,
     CB_TOS_2,
     CB_TOS_3,
     CB_TOS_4,
-    CB_ADMIN_PANEL,
-    COINS,
-    OPERATIONS_LIMIT,
+    CB_TUTORIAL_1,
+    CB_TUTORIAL_2,
+    CB_TUTORIAL_3,
+    CB_TUTORIAL_4,
+    CB_TX_HISTORY,
+    CB_WALLET,
+    CB_WITHDRAW,
+    BUNDLE_AMOUNT,
     BUNDLE_CONFIG,
     DEPOSIT_AMOUNT,
-    BUNDLE_AMOUNT,
-    SUPPORT_MESSAGE,
-    WITHDRAW_AMOUNT,
-    WITHDRAW_ADDRESS,
     DEPOSIT_COMMISSION,
     DEPOSIT_COMMISSION_PLUS,
-    WITHDRAW_COMMISSION,
+    OPERATIONS_LIMIT,
+    PLUS_OPERATIONS_LIMIT,
     PLUS_SUBSCRIPTION_PRICE,
+    SUPPORT_MESSAGE,
+    WITHDRAW_ADDRESS,
+    WITHDRAW_AMOUNT,
+    WITHDRAW_COMMISSION,
 )
 from bot.keyboards import (
     active_bundles_keyboard,
@@ -141,7 +143,6 @@ async def show_bundles(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if user is None:
         return
     record = await _storage(context).get_or_create(user.id)
-    from bot.constants import PLUS_OPERATIONS_LIMIT
     limit = PLUS_OPERATIONS_LIMIT if record.subscription_active else (record.operations_limit or OPERATIONS_LIMIT)
     text = texts.BUNDLES.format(
         done=record.operations_done,
@@ -208,7 +209,6 @@ async def bundle_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
     ex1, ex2, spread_str, min_u, max_u, p_min, p_max, t_min, t_max = config
 
     try:
-        import math
         amount = float(update.message.text.strip())
         if math.isnan(amount) or math.isinf(amount) or amount < min_u or amount > max_u:
             await update.message.reply_text(f"❌ Сумма должна быть от {min_u} до {max_u} USDT.")
@@ -223,7 +223,6 @@ async def bundle_amount_handler(update: Update, context: ContextTypes.DEFAULT_TY
             return BUNDLE_AMOUNT
             
         # Check limits
-        from bot.constants import PLUS_OPERATIONS_LIMIT
         ops_limit = PLUS_OPERATIONS_LIMIT if record.subscription_active else (record.operations_limit or OPERATIONS_LIMIT)
         if record.operations_done >= ops_limit:
             await update.message.reply_text(texts.BUNDLE_LIMIT_REACHED)
@@ -443,13 +442,11 @@ async def deposit_amount_handler(update: Update, context: ContextTypes.DEFAULT_T
             logger.debug(f"Failed to delete user message: {e}")
 
         # Generate a small unique fractional part to make invoice amount unique (0.001 - 0.199)
-        import os, time, random
         rnd = int.from_bytes(os.urandom(2), "big")
         cents_part = (rnd % 199) + 1  # 1..199 -> 0.001 .. 0.199
         unique_amount = float(amount) + (cents_part / 1000.0)
         unique_amount = round(unique_amount, 3)
 
-        # Create invoice via Xrocket
         import json as _json
 
         try:
@@ -622,16 +619,16 @@ async def plus_confirm_buy(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not user:
         return
 
+    import json as _json
+
     try:
         from bot import xrocket_client_prod as xrocket
         from bot.payments_service import extract_invoice_from_create_response
-        import json as _json
 
         storage = _storage(context)
         user_rec = await storage.get_or_create(user.id)
         payments = context.application.bot_data.get("payments")
 
-        import os
         rnd = int.from_bytes(os.urandom(2), "big")
         cents_part = (rnd % 199) + 1
         unique_amount = round(PLUS_SUBSCRIPTION_PRICE + cents_part / 1000.0, 3)
@@ -1096,6 +1093,6 @@ async def withdraw_address_handler(update: Update, context: ContextTypes.DEFAULT
 
 async def withdraw_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     context.user_data.pop("withdraw_amount", None)
-    await show_main_menu(update, context)
+    await show_main_menu(update, context, edit=True)
     return ConversationHandler.END
 
